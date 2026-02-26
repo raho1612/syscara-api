@@ -31,8 +31,13 @@ supabase = None
 
 if SUPABASE_URL and SUPABASE_KEY:
     try:
-        from supabase import create_client, Client
-        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        from supabase import create_client, Client, ClientOptions
+        import httpx
+        options = ClientOptions(
+            postgrest_client_timeout=120,
+            storage_client_timeout=120,
+        )
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY, options=options)
         print("[INIT] Supabase-Client erfolgreich erstellt.", flush=True)
     except ImportError:
         print("[ERROR] Die 'supabase' Bibliothek ist nicht installiert!", flush=True)
