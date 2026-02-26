@@ -38,9 +38,10 @@ if SUPABASE_URL and SUPABASE_KEY:
 
 def get_cached_or_fetch(endpoint_name, url):
     """Generischer Cache-Loader mit Supabase-Ausfallschutz."""
-    print(f"API-Call: {url}")
+    print(f"API-Call: {url} (Key: {endpoint_name})")
     try:
-        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=15)
+        # Timeout erhöht auf 30s für große Listen (Ads)
+        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=30)
         response.raise_for_status()
         if not response.text.strip():
             print(f"Leere Antwort von {url}")
@@ -260,7 +261,7 @@ def api_ads():
         body = request.get_json(silent=True) or {}
         if not isinstance(body, dict): body = {}
         with_photos = bool(body.pop('withPhotos', False))
-        raw      = get_cached_or_fetch('ads', f"{SYSCARA_BASE}/sale/ads/")
+        raw      = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
         vehicles = map_and_filter(raw, body, with_photos=with_photos)
         return jsonify({"success": True, "count": len(vehicles), "vehicles": vehicles})
     except Exception as e:
@@ -270,7 +271,7 @@ def api_ads():
 @app.route('/api/vehicles', methods=['GET', 'POST'])
 def api_vehicles():
     try:
-        raw   = get_cached_or_fetch('vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
+        raw   = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
         items = []
         for v in iter_items(raw):
             if not v or not isinstance(v, dict): continue
@@ -298,7 +299,7 @@ def api_vehicles():
 @app.route('/api/orders', methods=['GET', 'POST'])
 def api_orders():
     try:
-        raw   = get_cached_or_fetch('orders', f"{SYSCARA_BASE}/sale/orders/")
+        raw   = get_cached_or_fetch('sale/orders', f"{SYSCARA_BASE}/sale/orders/")
         items = []
         for v in iter_items(raw):
             if not v or not isinstance(v, dict): continue
@@ -320,7 +321,7 @@ def api_orders():
 @app.route('/api/equipment', methods=['GET', 'POST'])
 def api_equipment():
     try:
-        raw   = get_cached_or_fetch('equipment', f"{SYSCARA_BASE}/sale/equipment/")
+        raw   = get_cached_or_fetch('sale/equipment', f"{SYSCARA_BASE}/sale/equipment/")
         items = []
         for v in iter_items(raw):
             if not v or not isinstance(v, dict): continue
@@ -341,7 +342,7 @@ def api_equipment():
 @app.route('/api/stats', methods=['GET'])
 def api_stats():
     try:
-        raw = get_cached_or_fetch('ads', f"{SYSCARA_BASE}/sale/ads/")
+        raw = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
         stats = {
             "nach_typ":     {},
             "preis_buckets":{},
@@ -411,7 +412,7 @@ def handle_search():
     try:
         filters  = request.get_json(silent=True) or {}
         if not isinstance(filters, dict): filters = {}
-        raw      = get_cached_or_fetch('ads', f"{SYSCARA_BASE}/sale/ads/")
+        raw      = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
         vehicles = map_and_filter(raw, filters, with_photos=True)
         return jsonify({"success": True, "count": len(vehicles), "filters": filters, "vehicles": vehicles})
     except Exception as e:
@@ -422,11 +423,22 @@ def handle_search():
 def sync_all_now():
     """Holt alle wichtigen Listen von Syscara und spiegelt sie nach Supabase."""
     print("--- [BACKGROUND SYNC] Starte Abgleich mit Supabase ---")
+    
+    # Cleanup alter Kurz-Keys beim ersten Lauf
+    if supabase:
+        try:
+            old_keys = ["ads", "vehicles", "orders", "equipment", "test_equipment"]
+            supabase.table("api_cache").delete().in_("key", old_keys).execute()
+            print("[SYNC] Alte Kurz-Keys bereinigt.")
+        except:
+            pass
+
     endpoints = {
-        "ads":       f"{SYSCARA_BASE}/sale/ads/",
-        "vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
-        "orders":    f"{SYSCARA_BASE}/sale/orders/",
-        "equipment": f"{SYSCARA_BASE}/sale/equipment/"
+        "sale/ads":       f"{SYSCARA_BASE}/sale/ads/",
+        "sale/vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
+        "sale/orders":    f"{SYSCARA_BASE}/sale/orders/",
+        "sale/equipment": f"{SYSCARA_BASE}/sale/equipment/",
+        "sale/lists":     f"{SYSCARA_BASE}/sale/lists/?list=pictures"
     }
     for name, url in endpoints.items():
         try:
