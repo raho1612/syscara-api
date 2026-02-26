@@ -20,8 +20,12 @@ CORS(app, origins=[
 SYSCARA_BASE  = "https://api.syscara.com"
 USER          = os.getenv("SYSCARA_API_USER")
 PASS          = os.getenv("SYSCARA_API_PASS")
-CACHE_DIR     = "."
+CACHE_DIR     = "cache"
 CACHE_DURATION = 3600
+
+# Sicherstellen, dass Cache-Ordner existiert
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 
 # ─── Cache-Helfer ─────────────────────────────────────────────────────────────
 
@@ -33,37 +37,46 @@ def get_cached_or_fetch(endpoint_name, url):
     path = _cache_path(endpoint_name)
     if os.path.exists(path):
         age = time.time() - os.path.getmtime(path)
-        if age < CACHE_DURATION:
-            try:
-                with open(path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    print(f"Cache [{endpoint_name}] ({int(age)}s alt)")
-                    return data
-            except Exception as e:
-                print(f"Cache-Lesefehler [{endpoint_name}]: {e}")
+    """Generischer Cache-Loader mit Supabase-Ausfallschutz."""
     print(f"API-Call: {url}")
     try:
-        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=60)
+        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=15)
         response.raise_for_status()
-        # Body leer?
         if not response.text.strip():
             print(f"Leere Antwort von {url}")
             return {}
         data = response.json()
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        return data
-    except requests.exceptions.JSONDecodeError:
-        print(f"JSON-Fehler [{endpoint_name}] – Antwort: {response.text[:200]}")
-        return {}
-    except Exception as e:
-        print(f"Fehler [{endpoint_name}]: {e}")
-        if os.path.exists(path):
+        
+        # In Supabase abspeichern (Erfolgsfall)
+        if supabase:
             try:
-                with open(path, "r", encoding="utf-8") as f:
-                    return json.load(f)
-            except Exception:
-                pass
+                import time
+                supabase.table("api_cache").upsert({
+                    "key": endpoint_name,
+                    "data": data,
+                    "updated_at": int(time.time())
+                }).execute()
+            except Exception as dbe:
+                print(f"Supabase Schreib-Fehler [{endpoint_name}]: {dbe}")
+                
+        return data
+
+    except Exception as e:
+        print(f"Fehler bei Syscara API [{endpoint_name}] - {type(e).__name__}: {e}")
+        print("Versuche Fallback auf Supabase-Cache...")
+        if supabase:
+            try:
+                res = supabase.table("api_cache").select("data, updated_at").eq("key", endpoint_name).execute()
+                if res.data and len(res.data) > 0:
+                    import datetime
+                    last_up = res.data[0].get("updated_at", 0)
+                    nice_time = datetime.datetime.fromtimestamp(last_up).strftime('%Y-%m-%d %H:%M:%S')
+                    print(f"+++ ERFOLG: Daten aus Supabase geladen (Stand: {nice_time}) +++")
+                    return res.data[0]["data"]
+            except Exception as dbe:
+                print(f"Supabase Lese-Fehler [{endpoint_name}]: {dbe}")
+                
+        print("Kein Cache verfügbar. Gebe leeres Objekt zurück.")
         return {}
 
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
