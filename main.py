@@ -2,6 +2,8 @@ import os
 import json
 import time
 import requests
+import threading
+import datetime
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -20,23 +22,21 @@ CORS(app, origins=[
 SYSCARA_BASE  = "https://api.syscara.com"
 USER          = os.getenv("SYSCARA_API_USER")
 PASS          = os.getenv("SYSCARA_API_PASS")
-CACHE_DIR     = "cache"
-CACHE_DURATION = 3600
 
-# Sicherstellen, dass Cache-Ordner existiert
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+# Supabase Konfig
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        from supabase import create_client, Client
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Supabase Init Fehler: {e}")
 
 # ─── Cache-Helfer ─────────────────────────────────────────────────────────────
 
-def _cache_path(name):
-    return os.path.join(CACHE_DIR, f"cache_{name}.json")
-
 def get_cached_or_fetch(endpoint_name, url):
-    """Generischer Cache-Loader. Gibt immer eine list oder dict zurück."""
-    path = _cache_path(endpoint_name)
-    if os.path.exists(path):
-        age = time.time() - os.path.getmtime(path)
     """Generischer Cache-Loader mit Supabase-Ausfallschutz."""
     print(f"API-Call: {url}")
     try:
@@ -50,7 +50,6 @@ def get_cached_or_fetch(endpoint_name, url):
         # In Supabase abspeichern (Erfolgsfall)
         if supabase:
             try:
-                import time
                 supabase.table("api_cache").upsert({
                     "key": endpoint_name,
                     "data": data,
@@ -68,7 +67,6 @@ def get_cached_or_fetch(endpoint_name, url):
             try:
                 res = supabase.table("api_cache").select("data, updated_at").eq("key", endpoint_name).execute()
                 if res.data and len(res.data) > 0:
-                    import datetime
                     last_up = res.data[0].get("updated_at", 0)
                     nice_time = datetime.datetime.fromtimestamp(last_up).strftime('%Y-%m-%d %H:%M:%S')
                     print(f"+++ ERFOLG: Daten aus Supabase geladen (Stand: {nice_time}) +++")
@@ -114,12 +112,10 @@ def map_and_filter(raw, filters, with_photos=False):
         beds_d     = _d('beds')
         climate    = _d('climate')
 
-        # features ist ein String-Array, kein Dict
         features = v.get('features', [])
         if not isinstance(features, list):
             features = []
 
-        # Betten-Liste aus beds.beds[]
         beds_list = beds_d.get('beds', [])
         if not isinstance(beds_list, list):
             beds_list = []
@@ -134,7 +130,6 @@ def map_and_filter(raw, filters, with_photos=False):
         gewicht_kg = weights.get('allowed', 0) or weights.get('total', 0) or 0
         schlafplaetze = beds_d.get('sleeping', 0) or 0
 
-        # Feature-Flags aus String-Array
         has_dusche   = 'sep_dusche' in features or 'dusche' in features
         has_navi     = 'navigationssystem' in features
         has_tv       = 'tv' in features or 'sat' in features
@@ -143,23 +138,13 @@ def map_and_filter(raw, filters, with_photos=False):
         has_garage   = 'heckgarage' in features or 'garage' in features
         has_fahrrad  = 'fahrradtraeger' in features or 'fahrradtraeger_e' in features
         has_backofen = 'backofen' in features or 'mikrowelle' in features
-
-        # Klimaanlage aus climate.aircondition
         has_klima = bool(climate.get('aircondition', False))
-
-        # Heizungstyp aus climate.heating_type
         heating_type = str(climate.get('heating_type', '')).upper()
-
-        # Festbett: hat FRENCH_BED oder SINGLE_BEDS
         has_festbett = 'FRENCH_BED' in bed_types or 'SINGLE_BEDS' in bed_types
-
-        # Getriebe aus engine.gear
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
         has_auto = gear_raw == 'AUTOMATIC'
-
         condition = str(v.get('condition', '')).upper()
 
-        # ── Fahrzeugart ──
         fa = str(filters.get('art', 'alle')).lower()
         if fa != 'alle':
             if fa == 'wohnwagen'      and v.get('type') != 'Caravan':   continue
@@ -167,12 +152,10 @@ def map_and_filter(raw, filters, with_photos=False):
             if fa == 'teilintegriert' and art_label != 'teilintegriert': continue
             if fa == 'kastenwagen'    and art_label != 'kastenwagen':    continue
 
-        # ── Zustand ──
         zustand_filter = str(filters.get('zustand', 'alle')).lower()
         if zustand_filter == 'neu'       and condition != 'NEW':  continue
         if zustand_filter == 'gebraucht' and condition != 'USED': continue
 
-        # ── Numerische Filter ──
         try:
             if ps         < int(filters.get('psMin')     or 0):       continue
             if ps         > int(filters.get('psMax')     or 99999):   continue
@@ -190,17 +173,14 @@ def map_and_filter(raw, filters, with_photos=False):
         except (ValueError, TypeError):
             pass
 
-        # ── Heizung ──
         heizung_filter = str(filters.get('heizung', 'alle')).lower()
         if heizung_filter == 'gas'    and heating_type not in ('AIR_GAS',):                          continue
         if heizung_filter == 'diesel' and heating_type not in ('AIR_DIESEL', 'AIR_DIESEL_ELECTRIC'): continue
 
-        # ── Getriebe ──
         getriebe_filter = str(filters.get('getriebe', 'alle')).lower()
         if getriebe_filter == 'automatik' and not has_auto: continue
         if getriebe_filter == 'schaltung' and has_auto:     continue
 
-        # ── Ja/Nein-Ausstattung ──
         def yn(key, value):
             f_val = str(filters.get(key, 'egal')).lower()
             if f_val == 'ja'   and not value: return True
@@ -218,9 +198,7 @@ def map_and_filter(raw, filters, with_photos=False):
         if yn('garage',        has_garage):   continue
         if yn('fahrradtraeger',has_fahrrad):  continue
         if yn('backofen',      has_backofen): continue
-        # dinette / kuehlschrank: nicht mappbar, ignorieren
 
-        # ── Betten-Typ ──
         bett_filter = str(filters.get('betten', 'alle')).lower()
         if bett_filter != 'alle':
             if bett_filter == 'einzelbetten' and 'SINGLE_BEDS' not in bed_types: continue
@@ -229,7 +207,6 @@ def map_and_filter(raw, filters, with_photos=False):
             if bett_filter == 'stockbett'    and 'BUNK_BEDS'   not in bed_types: continue
             if bett_filter == 'alkoven'      and 'ALCOVE_BED'  not in bed_types: continue
 
-        # ── Objekt aufbauen ──
         obj = {
             "id":           v.get('id'),
             "hersteller":   model.get('producer', '-'),
@@ -277,13 +254,11 @@ def map_and_filter(raw, filters, with_photos=False):
 def index():
     return send_file('fahrzeugsuche_local.html')
 
-# Ads
 @app.route('/api/ads', methods=['POST'])
 def api_ads():
     try:
         body = request.get_json(silent=True) or {}
-        if not isinstance(body, dict):
-            body = {}
+        if not isinstance(body, dict): body = {}
         with_photos = bool(body.pop('withPhotos', False))
         raw      = get_cached_or_fetch('ads', f"{SYSCARA_BASE}/sale/ads/")
         vehicles = map_and_filter(raw, body, with_photos=with_photos)
@@ -292,7 +267,6 @@ def api_ads():
         import traceback; traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Fahrzeugbestand
 @app.route('/api/vehicles', methods=['GET', 'POST'])
 def api_vehicles():
     try:
@@ -321,7 +295,6 @@ def api_vehicles():
         import traceback; traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Aufträge
 @app.route('/api/orders', methods=['GET', 'POST'])
 def api_orders():
     try:
@@ -338,14 +311,12 @@ def api_orders():
                 "preis":   v.get('price') or v.get('total', 0),
                 "kunde":   v.get('customer') or v.get('buyer', '-'),
             })
-        # Wenn leer: trotzdem valides JSON zurückgeben
         return jsonify({"success": True, "count": len(items), "orders": items,
                         "info": "Keine Aufträge gefunden" if not items else None})
     except Exception as e:
         import traceback; traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Equipment
 @app.route('/api/equipment', methods=['GET', 'POST'])
 def api_equipment():
     try:
@@ -367,7 +338,6 @@ def api_equipment():
         import traceback; traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Stats – erweitert mit Heizung, Getriebe, Hubbett, Länge-Buckets
 @app.route('/api/stats', methods=['GET'])
 def api_stats():
     try:
@@ -385,16 +355,11 @@ def api_stats():
             "avg_preis":    0,
         }
         preise = []
-
         for v in iter_items(raw):
             if not v or not isinstance(v, dict) or not v.get('id'): continue
-
-            # Typ
             typ = v.get('typeof', '') or ('Wohnwagen' if v.get('type') == 'Caravan' else 'Sonstige')
             if not typ: typ = 'Sonstige'
             stats["nach_typ"][typ] = stats["nach_typ"].get(typ, 0) + 1
-
-            # Preis
             prices = v.get('prices', {}) or {}
             preis  = prices.get('offer') or prices.get('list') or prices.get('basic') or 0
             if preis:
@@ -405,8 +370,6 @@ def api_stats():
                 elif preis < 100000: bucket = "70–100T"
                 else:                bucket = "> 100T"
                 stats["preis_buckets"][bucket] = stats["preis_buckets"].get(bucket, 0) + 1
-
-            # Länge
             dims   = v.get('dimensions', {}) or {}
             laenge = dims.get('length', 0) or 0
             if laenge:
@@ -416,47 +379,26 @@ def api_stats():
                 elif laenge < 800:   lbucket = "7,5–8m"
                 else:                lbucket = "> 8m"
                 stats["laenge_buckets"][lbucket] = stats["laenge_buckets"].get(lbucket, 0) + 1
-
-            # features als String-Array
             features = v.get('features', [])
-            if not isinstance(features, list):
-                features = []
-
+            if not isinstance(features, list): features = []
             climate = v.get('climate', {}) or {}
             engine  = v.get('engine',  {}) or {}
             beds_d  = v.get('beds',    {}) or {}
             beds_list = beds_d.get('beds', []) if isinstance(beds_d.get('beds'), list) else []
             bed_types = [str(b.get('type', '')).upper() for b in beds_list if isinstance(b, dict)]
-
-            # Heizung via climate.heating_type
             heating_type = str(climate.get('heating_type', '')).upper()
-            if 'DIESEL' in heating_type:
-                stats["heizung"]["Diesel"] += 1
-            elif 'GAS' in heating_type:
-                stats["heizung"]["Gas"] += 1
-            else:
-                stats["heizung"]["Unbekannt"] += 1
-
-            # Getriebe via engine.gear
+            if 'DIESEL' in heating_type: stats["heizung"]["Diesel"] += 1
+            elif 'GAS' in heating_type: stats["heizung"]["Gas"] += 1
+            else: stats["heizung"]["Unbekannt"] += 1
             gear = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
-            if gear == 'AUTOMATIC':
-                stats["getriebe"]["Automatik"] += 1
-            elif gear == 'MANUAL':
-                stats["getriebe"]["Schaltung"] += 1
-            else:
-                stats["getriebe"]["Unbekannt"] += 1
-
-            # Hubbett
+            if gear == 'AUTOMATIC': stats["getriebe"]["Automatik"] += 1
+            elif gear == 'MANUAL': stats["getriebe"]["Schaltung"] += 1
+            else: stats["getriebe"]["Unbekannt"] += 1
             has_hub = 'PULL_BED' in bed_types or 'ROOF_BED' in bed_types
             stats["hubbett"]["Ja" if has_hub else "Nein"] += 1
-
-            # Dinette – nicht mappbar
             stats["dinette"]["Nein"] += 1
-
-            # Dusche
             has_du = 'sep_dusche' in features or 'dusche' in features
             stats["dusche"]["Ja" if has_du else "Nein"] += 1
-
         stats["gesamt"]    = len(preise)
         stats["avg_preis"] = int(sum(preise) / len(preise)) if preise else 0
         return jsonify({"success": True, "stats": stats})
@@ -464,7 +406,6 @@ def api_stats():
         import traceback; traceback.print_exc()
         return jsonify({"success": False, "error": str(e)}), 500
 
-# Legacy
 @app.route('/fahrzeugsuche', methods=['POST'])
 def handle_search():
     try:
@@ -476,7 +417,43 @@ def handle_search():
     except Exception as e:
         return jsonify({"success": False, "error": "Interner Fehler", "details": str(e)}), 500
 
+# ─── Proaktiver Background Sync ───────────────────────────────────────────────
+
+def sync_all_now():
+    """Holt alle wichtigen Listen von Syscara und spiegelt sie nach Supabase."""
+    print("--- [BACKGROUND SYNC] Starte Abgleich mit Supabase ---")
+    endpoints = {
+        "ads":       f"{SYSCARA_BASE}/sale/ads/",
+        "vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
+        "orders":    f"{SYSCARA_BASE}/sale/orders/",
+        "equipment": f"{SYSCARA_BASE}/sale/equipment/"
+    }
+    for name, url in endpoints.items():
+        try:
+            print(f"[SYNC] Lade {name}...")
+            get_cached_or_fetch(name, url)
+        except Exception as e:
+            print(f"[SYNC ERROR] Fehler bei {name}: {e}")
+    print("--- [BACKGROUND SYNC] Abgeschlossen ---")
+
+def background_sync_loop():
+    """Endlosschleife für den stündlichen Abgleich."""
+    time.sleep(10)
+    while True:
+        sync_all_now()
+        time.sleep(3600)
+
+def start_sync_thread():
+    """Startet den Sync-Prozess in einem eigenen Thread."""
+    if not supabase:
+        print("[SYNC] Übersprungen - Supabase nicht konfiguriert.")
+        return
+    thread = threading.Thread(target=background_sync_loop, daemon=True)
+    thread.start()
+    print("[SYNC] Hintergrund-Thread gestartet (Intervall: 1 Std).")
+
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
     print(f"Syscara Python API läuft auf Port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=True)
+    start_sync_thread()
+    app.run(host='0.0.0.0', port=port, debug=False)
