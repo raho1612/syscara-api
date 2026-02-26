@@ -27,12 +27,18 @@ PASS          = os.getenv("SYSCARA_API_PASS")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 supabase = None
+
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         from supabase import create_client, Client
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("[INIT] Supabase-Client erfolgreich erstellt.")
+    except ImportError:
+        print("[ERROR] Die 'supabase' Bibliothek ist nicht installiert! Bitte 'pip install supabase' ausführen.")
     except Exception as e:
-        print(f"Supabase Init Fehler: {e}")
+        print(f"[ERROR] Supabase Init Fehler: {e}")
+else:
+    print("[INIT] Supabase nicht konfiguriert (URL/KEY fehlt in ENV).")
 
 # ─── Cache-Helfer ─────────────────────────────────────────────────────────────
 
