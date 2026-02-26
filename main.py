@@ -67,13 +67,8 @@ def save_to_supabase_chunked(endpoint_name, data):
     
     if total_items == 0:
         return True
-        
-    # Bereinige zuerst eventuelle alte Einträge für diesen Endpoint (inkl. Chunks)
-    try:
-        supabase.table("api_cache").delete().like("key", f"{endpoint_name}%").execute()
-    except Exception as e:
-        print(f"[CACHE] Cleanup Fehler für {endpoint_name}: {e}", flush=True)
-    
+
+    # Kein DELETE mehr – upsert überschreibt vorhandene Einträge direkt.
     num_chunks = math.ceil(total_items / CHUNK_SIZE)
     timestamp = int(time.time())
     
