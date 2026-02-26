@@ -23,6 +23,10 @@ SYSCARA_BASE  = "https://api.syscara.com"
 USER          = os.getenv("SYSCARA_API_USER")
 PASS          = os.getenv("SYSCARA_API_PASS")
 
+# Debugging-Hilfe für die Zugangsdaten
+print(f"[INIT] Syscara API User gefunden: {'JA' if USER else 'NEIN'}", flush=True)
+print(f"[INIT] Syscara API Pass gefunden: {'JA' if PASS else 'NEIN'}", flush=True)
+
 # Supabase Konfig
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
