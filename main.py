@@ -4,6 +4,7 @@ import time
 import requests
 import threading
 import datetime
+import math
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -23,10 +24,6 @@ SYSCARA_BASE  = "https://api.syscara.com"
 USER          = os.getenv("SYSCARA_API_USER")
 PASS          = os.getenv("SYSCARA_API_PASS")
 
-# Debugging-Hilfe für die Zugangsdaten
-print(f"[INIT] Syscara API User gefunden: {'JA' if USER else 'NEIN'}", flush=True)
-print(f"[INIT] Syscara API Pass gefunden: {'JA' if PASS else 'NEIN'}", flush=True)
-
 # Supabase Konfig
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -44,48 +41,135 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     print("[INIT] Supabase nicht konfiguriert (URL/KEY fehlt).", flush=True)
 
-# ─── Cache-Helfer ─────────────────────────────────────────────────────────────
-
-def get_cached_or_fetch(endpoint_name, url):
-    """Generischer Cache-Loader mit Supabase-Ausfallschutz."""
-    print(f"API-Call: {url} (Key: {endpoint_name})", flush=True)
-    try:
-        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=45)
-        response.raise_for_status()
-        data = response.json()
-        
-        if supabase:
-            try:
-                supabase.table("api_cache").upsert({
-                    "key": endpoint_name,
-                    "data": data,
-                    "updated_at": int(time.time())
-                }).execute()
-                print(f"[CACHE] {endpoint_name} erfolgreich in Supabase gespeichert.", flush=True)
-            except Exception as dbe:
-                print(f"[ERROR] Supabase Write [{endpoint_name}]: {dbe}", flush=True)
-        return data
-
-    except Exception as e:
-        print(f"[ERROR] Syscara API [{endpoint_name}]: {e}", flush=True)
-        if supabase:
-            try:
-                res = supabase.table("api_cache").select("data, updated_at").eq("key", endpoint_name).execute()
-                if res.data and len(res.data) > 0:
-                    return res.data[0]["data"]
-            except: pass
-        return {}
-
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 
 def iter_items(raw):
-    if isinstance(raw, dict): return raw.values()
+    if isinstance(raw, dict): return list(raw.values())
     if isinstance(raw, list): return raw
     return []
 
 def fmt_preis(preis):
     if not preis: return '-'
     return f"{preis:,.2f} €".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+# ─── Chunking Logik für Supabase ──────────────────────────────────────────────
+
+CHUNK_SIZE = 500 # Maximale Anzahl an Elementen pro Chunk
+
+def save_to_supabase_chunked(endpoint_name, data):
+    """Speichert große Listen in kleineren Chunks, um Timeouts zu vermeiden."""
+    if not supabase: return False
+    
+    items = iter_items(data)
+    total_items = len(items)
+    is_dict = isinstance(data, dict)
+    keys_list = list(data.keys()) if is_dict else []
+    
+    if total_items == 0:
+        return True
+        
+    # Bereinige zuerst eventuelle alte Einträge für diesen Endpoint (inkl. Chunks)
+    try:
+        supabase.table("api_cache").delete().like("key", f"{endpoint_name}%").execute()
+    except Exception as e:
+        print(f"[CACHE] Cleanup Fehler für {endpoint_name}: {e}", flush=True)
+    
+    num_chunks = math.ceil(total_items / CHUNK_SIZE)
+    timestamp = int(time.time())
+    
+    for i in range(num_chunks):
+        start_idx = i * CHUNK_SIZE
+        end_idx = min((i + 1) * CHUNK_SIZE, total_items)
+        
+        chunk_key = f"{endpoint_name}#chunk{i}"
+        
+        # Rekonstruiere die Datenstruktur für den Chunk
+        if is_dict:
+            chunk_data = {k: data[k] for k in keys_list[start_idx:end_idx]}
+        else:
+            chunk_data = items[start_idx:end_idx]
+            
+        try:
+            supabase.table("api_cache").upsert({
+                "key": chunk_key,
+                "data": chunk_data,
+                "updated_at": timestamp
+            }).execute()
+            print(f"  [CHUNK] {chunk_key} gespeichert ({end_idx-start_idx} Items).", flush=True)
+        except Exception as dbe:
+            print(f"  [ERROR] Chunk {chunk_key} fehlgeschlagen: {dbe}", flush=True)
+            return False
+            
+    # Speichere Meta-Info, wie viele Chunks es gibt
+    try:
+        supabase.table("api_cache").upsert({
+            "key": f"{endpoint_name}#meta",
+            "data": {"chunks": num_chunks, "is_dict": is_dict},
+            "updated_at": timestamp
+        }).execute()
+    except: pass
+    
+    return True
+
+def load_from_supabase_chunked(endpoint_name):
+    """Lädt und kombiniert Chunks aus Supabase."""
+    if not supabase: return {}
+    
+    try:
+        # Lade zuerst die Metadaten
+        meta_res = supabase.table("api_cache").select("data").eq("key", f"{endpoint_name}#meta").execute()
+        if not meta_res.data:
+            # Fallback: Versuche es auf die alte Art (ohne Chunks)
+            res = supabase.table("api_cache").select("data, updated_at").eq("key", endpoint_name).execute()
+            if res.data:
+                return res.data[0]["data"]
+            return {}
+            
+        meta = meta_res.data[0]["data"]
+        num_chunks = meta.get("chunks", 0)
+        is_dict = meta.get("is_dict", False)
+        
+        combined_list = []
+        combined_dict = {}
+        
+        for i in range(num_chunks):
+            chunk_key = f"{endpoint_name}#chunk{i}"
+            res = supabase.table("api_cache").select("data").eq("key", chunk_key).execute()
+            if res.data:
+                chunk_data = res.data[0]["data"]
+                if is_dict and isinstance(chunk_data, dict):
+                    combined_dict.update(chunk_data)
+                elif isinstance(chunk_data, list):
+                    combined_list.extend(chunk_data)
+                    
+        print(f"+++ ERFOLG: {endpoint_name} ({num_chunks} Chunks) aus Supabase geladen +++", flush=True)
+        return combined_dict if is_dict else combined_list
+        
+    except Exception as e:
+        print(f"[CACHE] Ladefehler aus Supabase: {e}", flush=True)
+        return {}
+
+# ─── Cache-Helfer ─────────────────────────────────────────────────────────────
+
+def get_cached_or_fetch(endpoint_name, url):
+    """Generischer Cache-Loader mit Supabase-Ausfallschutz und Chunking."""
+    print(f"API-Call: {url}", flush=True)
+    try:
+        response = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        
+        # In Supabase abspeichern (mit Chunking)
+        success = save_to_supabase_chunked(endpoint_name, data)
+        if success:
+            print(f"[CACHE] {endpoint_name} erfolgreich komplett in Supabase gesichert.", flush=True)
+            
+        return data
+
+    except Exception as e:
+        print(f"[ERROR] Syscara API [{endpoint_name}]: {e}", flush=True)
+        print("Versuche Fallback auf Supabase-Cache...", flush=True)
+        return load_from_supabase_chunked(endpoint_name)
 
 # ─── Filter-Logik (unverändert) ────────────────────────────────────────────────
 
@@ -131,22 +215,22 @@ def index(): return send_file('fahrzeugsuche_local.html')
 @app.route('/api/ads', methods=['POST'])
 def api_ads():
     raw = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
-    return jsonify({"success": True, "count": len(raw), "vehicles": map_and_filter(raw, {})})
+    return jsonify({"success": True, "count": len(iter_items(raw)), "vehicles": map_and_filter(raw, {})})
 
 @app.route('/api/vehicles', methods=['GET', 'POST'])
 def api_vehicles():
     raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
-    return jsonify({"success": True, "vehicles": raw})
+    return jsonify({"success": True, "vehicles": iter_items(raw)})
 
 @app.route('/api/orders', methods=['GET', 'POST'])
 def api_orders():
     raw = get_cached_or_fetch('sale/orders', f"{SYSCARA_BASE}/sale/orders/")
-    return jsonify({"success": True, "orders": raw})
+    return jsonify({"success": True, "orders": iter_items(raw)})
 
 @app.route('/api/equipment', methods=['GET', 'POST'])
 def api_equipment():
     raw = get_cached_or_fetch('sale/equipment', f"{SYSCARA_BASE}/sale/equipment/")
-    return jsonify({"success": True, "equipment": raw})
+    return jsonify({"success": True, "equipment": iter_items(raw)})
 
 @app.route('/api/stats', methods=['GET'])
 def api_stats():
@@ -158,16 +242,8 @@ def api_stats():
 def sync_all_now():
     """Holt alle Listen. Kleine Endpoints zuerst."""
     print("\n--- [BACKGROUND SYNC] Start ---", flush=True)
-    
-    if supabase:
-        try:
-            old_keys = ["ads", "vehicles", "orders", "equipment", "test_equipment"]
-            supabase.table("api_cache").delete().in_("key", old_keys).execute()
-            print("[SYNC] Alte Einträge bereinigt.", flush=True)
-        except Exception as e:
-            print(f"[SYNC] Cleanup Info: {e}", flush=True)
 
-    # REIHENFOLGE: Kleine Pakete zuerst, damit man sofort was sieht
+    # REIHENFOLGE: Kleine Pakete zuerst
     endpoints = {
         "sale/equipment": f"{SYSCARA_BASE}/sale/equipment/",
         "sale/orders":    f"{SYSCARA_BASE}/sale/orders/",
@@ -178,6 +254,7 @@ def sync_all_now():
     
     for name, url in endpoints.items():
         try:
+            print(f"-----", flush=True)
             print(f"[SYNC] Verarbeite: {name}...", flush=True)
             get_cached_or_fetch(name, url)
         except Exception as e:
@@ -186,7 +263,7 @@ def sync_all_now():
     print("--- [BACKGROUND SYNC] Fertig ---\n", flush=True)
 
 def background_sync_loop():
-    time.sleep(10)
+    time.sleep(5)
     while True:
         sync_all_now()
         time.sleep(3600)
