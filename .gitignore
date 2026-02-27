@@ -1,5 +1,6 @@
 .env
 __pycache__/
 *.pyc
-cache_*.json
-syscara_cache.json
+cache/
+*.json
+!requirements.txt

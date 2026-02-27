@@ -201,8 +201,28 @@ def map_and_filter(raw, filters, with_photos=False):
         has_auto = gear_raw == 'AUTOMATIC'
         condition = str(v.get('condition', '')).upper()
         obj = {
-            "id": v.get('id'), "hersteller": model.get('producer', '-'), "modell": model.get('model', '-'),
-            "preis": preis, "preis_format": fmt_preis(preis), "zustand": condition, "thumb": None
+            "id": v.get('id'),
+            "hersteller": model.get('producer', '-'),
+            "modell": model.get('model', '-'),
+            "serie": model.get('series', '-'),
+            "preis": preis,
+            "preis_format": fmt_preis(preis),
+            "zustand": condition,
+            "art": art_label,
+            "ps": ps,
+            "kw": engine.get('kw' , 0) or 0,
+            "laenge_m": f"{laenge/100:.2f}" if laenge else "-",
+            "laenge_cm": laenge,
+            "modelljahr": modelljahr,
+            "gewicht_kg": gewicht_kg,
+            "schlafplaetze": schlafplaetze,
+            "dusche": has_dusche,
+            "festbett": has_festbett,
+            "dinette": 'dinette' in features,
+            "klima": has_klima,
+            "getriebe": gear_raw,
+            "vin": v.get('identifier', {}).get('vin', '-'),
+            "thumb": None
         }
         vehicles.append(obj)
     return vehicles
@@ -229,6 +249,20 @@ def api_orders():
 
 @app.route('/api/equipment', methods=['GET', 'POST'])
 def api_equipment():
+    year = request.args.get('year')
+    if year and year != 'alle':
+        url = f"{SYSCARA_BASE}/sale/equipment/?modelyear={year}"
+        print(f"Direct Year Fetch for Equipment: {url}", flush=True)
+        try:
+            r = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            return jsonify({"success": True, "equipment": iter_items(data)})
+        except Exception as e:
+            print(f"[ERROR] Direct Year Fetch failed: {e}", flush=True)
+            raw = load_from_supabase_chunked('sale/equipment')
+            return jsonify({"success": True, "equipment": iter_items(raw)})
+
     raw = get_cached_or_fetch('sale/equipment', f"{SYSCARA_BASE}/sale/equipment/")
     return jsonify({"success": True, "equipment": iter_items(raw)})
 
