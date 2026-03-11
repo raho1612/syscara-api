@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # App-Code kopieren (ohne Cache-Dateien)
 COPY main.py .
+COPY shared ./shared
 
 ENV PORT=5000
 EXPOSE 5000

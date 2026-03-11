@@ -73,9 +73,16 @@ _ROOT_ENV = Path(__file__).resolve().parents[1] / ".env"
 load_dotenv()
 load_dotenv(dotenv_path=_ROOT_ENV, override=False)
 
-SHARED_ROOT = Path(__file__).resolve().parents[1] / "syscara-dashboard"
-if str(SHARED_ROOT) not in sys.path:
-    sys.path.append(str(SHARED_ROOT))
+CURRENT_DIR = Path(__file__).resolve().parent
+SHARED_IMPORT_ROOTS = [
+    CURRENT_DIR,
+    CURRENT_DIR.parent / "syscara-dashboard",
+]
+
+for shared_root in SHARED_IMPORT_ROOTS:
+    shared_package = shared_root / "shared"
+    if shared_package.exists() and str(shared_root) not in sys.path:
+        sys.path.append(str(shared_root))
 
 from shared.vehicle_stats import build_vehicle_stats
 
