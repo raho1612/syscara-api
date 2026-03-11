@@ -5,6 +5,7 @@ import requests
 import threading
 import datetime
 import math
+from datetime import datetime
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -46,23 +47,69 @@ if SUPABASE_URL and SUPABASE_KEY:
 else:
     print("[INIT] Supabase nicht konfiguriert (URL/KEY fehlt).", flush=True)
 
-# ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Hilfsfunktionen ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 def iter_items(raw):
     if isinstance(raw, dict): return list(raw.values())
     if isinstance(raw, list): return raw
     return []
 
+
+def normalize_collection_items(raw, primary_key=None):
+    if isinstance(raw, dict) and primary_key:
+        primary = raw.get(primary_key)
+        if isinstance(primary, list):
+            return primary
+
+    items = list(iter_items(raw))
+    if len(items) == 1 and isinstance(items[0], list):
+        return items[0]
+    return items
+
+
+def extract_order_datetime(order_item):
+    candidates = []
+
+    date_obj = order_item.get('date')
+    if isinstance(date_obj, str):
+        candidates.append(date_obj)
+    elif isinstance(date_obj, dict):
+        for key in ('order', 'create', 'created', 'create_date', 'created_at', 'createAt', 'update', 'updated_at'):
+            value = date_obj.get(key)
+            if isinstance(value, str) and value:
+                candidates.append(value)
+        for value in date_obj.values():
+            if isinstance(value, str) and value:
+                candidates.append(value)
+
+    for key in ('created_at', 'created', 'create', 'date', 'createdAt', 'order_date'):
+        value = order_item.get(key)
+        if isinstance(value, str) and value:
+            candidates.append(value)
+
+    for value in candidates:
+        try {
+            return datetime.fromisoformat(value.replace('Z', '+00:00'))
+        } catch {
+            try {
+                return datetime.strptime(value.split('T')[0], '%Y-%m-%d')
+            } catch {
+                continue
+            }
+        }
+    }
+
+    return None
 def fmt_preis(preis):
     if not preis: return '-'
-    return f"{preis:,.2f} €".replace(',', 'X').replace('.', ',').replace('X', '.')
+    return f"{preis:,.2f} Ôé¼".replace(',', 'X').replace('.', ',').replace('X', '.')
 
-# ─── Chunking Logik für Supabase ──────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Chunking Logik f├╝r Supabase ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 CHUNK_SIZE = 500 # Maximale Anzahl an Elementen pro Chunk
 
 def save_to_supabase_chunked(endpoint_name, data):
-    """Speichert große Listen in kleineren Chunks, um Timeouts zu vermeiden."""
+    """Speichert gro├ƒe Listen in kleineren Chunks, um Timeouts zu vermeiden."""
     if not supabase: return False
     
     items = iter_items(data)
@@ -73,7 +120,7 @@ def save_to_supabase_chunked(endpoint_name, data):
     if total_items == 0:
         return True
 
-    # Kein DELETE mehr – upsert überschreibt vorhandene Einträge direkt.
+    # Kein DELETE mehr ÔÇô upsert ├╝berschreibt vorhandene Eintr├ñge direkt.
     num_chunks = math.ceil(total_items / CHUNK_SIZE)
     timestamp = int(time.time())
     
@@ -83,7 +130,7 @@ def save_to_supabase_chunked(endpoint_name, data):
         
         chunk_key = f"{endpoint_name}#chunk{i}"
         
-        # Rekonstruiere die Datenstruktur für den Chunk
+        # Rekonstruiere die Datenstruktur f├╝r den Chunk
         if is_dict:
             chunk_data = {k: data[k] for k in keys_list[start_idx:end_idx]}
         else:
@@ -112,7 +159,7 @@ def save_to_supabase_chunked(endpoint_name, data):
     return True
 
 def load_from_supabase_chunked(endpoint_name):
-    """Lädt und kombiniert Chunks aus Supabase."""
+    """L├ñdt und kombiniert Chunks aus Supabase."""
     if not supabase: return {}
     
     try:
@@ -149,7 +196,7 @@ def load_from_supabase_chunked(endpoint_name):
         print(f"[CACHE] Ladefehler aus Supabase: {e}", flush=True)
         return {}
 
-# ─── Cache-Helfer ─────────────────────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Cache-Helfer ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 def get_cached_or_fetch(endpoint_name, url):
     """Generischer Cache-Loader mit Supabase-Ausfallschutz und Chunking."""
@@ -171,7 +218,7 @@ def get_cached_or_fetch(endpoint_name, url):
         print("Versuche Fallback auf Supabase-Cache...", flush=True)
         return load_from_supabase_chunked(endpoint_name)
 
-# ─── Filter-Logik (unverändert) ────────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Filter-Logik (unver├ñndert) ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 def map_and_filter(raw, filters, with_photos=False):
     vehicles = []
@@ -227,7 +274,7 @@ def map_and_filter(raw, filters, with_photos=False):
         vehicles.append(obj)
     return vehicles
 
-# ─── Routen ───────────────────────────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Routen ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 @app.route('/')
 def index(): return send_file('fahrzeugsuche_local.html')
@@ -245,8 +292,32 @@ def api_vehicles():
 @app.route('/api/orders', methods=['GET', 'POST'])
 def api_orders():
     raw = get_cached_or_fetch('sale/orders', f"{SYSCARA_BASE}/sale/orders/")
-    return jsonify({"success": True, "orders": iter_items(raw)})
+    items = normalize_collection_items(raw, 'orders')
 
+    year = request.args.get('year')
+    if year and year != 'alle':
+        try:
+            year_num = int(year)
+        except (TypeError, ValueError):
+            year_num = None
+
+        if year_num is not None:
+            filtered_items = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                order_dt = extract_order_datetime(item)
+                if order_dt and order_dt.year == year_num:
+                    filtered_items.append(item)
+            items = filtered_items
+
+    try:
+        print(f"[DEBUG] /api/orders -> items: {len(items)}", flush=True)
+        if items:
+            print(f"[DEBUG] first order sample: {str(items[0])[:200]}", flush=True)
+    except Exception:
+        pass
+    return jsonify({"success": True, "count": len(items), "orders": items})
 @app.route('/api/equipment', methods=['GET', 'POST'])
 def api_equipment():
     year = request.args.get('year')
@@ -271,7 +342,7 @@ def api_stats():
     raw = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
     return jsonify({"success": True, "stats": {}})
 
-# ─── Proaktiver Background Sync ───────────────────────────────────────────────
+# ÔöÇÔöÇÔöÇ Proaktiver Background Sync ÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇÔöÇ
 
 def sync_all_now():
     """Holt alle Listen. Kleine Endpoints zuerst."""
@@ -306,7 +377,7 @@ def start_sync_thread():
     if not supabase: return
     t = threading.Thread(target=background_sync_loop, daemon=True)
     t.start()
-    print("[SYNC] Hintergrund-Thread läuft.", flush=True)
+    print("[SYNC] Hintergrund-Thread l├ñuft.", flush=True)
 
 if __name__ == '__main__':
     port = int(os.getenv("PORT", 5000))
