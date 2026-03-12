@@ -1014,8 +1014,8 @@ def api_evaluate_claude():
         return jsonify({"success": False, "error": "ANTHROPIC_API_KEY nicht konfiguriert."}), 503
 
     try:
-        client = _anthropic.Anthropic(api_key=api_key)
-        max_tokens = 2000 if model_key == "haiku" else 4000
+        client = _anthropic.Anthropic(api_key=api_key, timeout=60.0)
+        max_tokens = 1800 if model_key == "haiku" else 1800
         last_error = None
 
         for model_id in model_candidates:
