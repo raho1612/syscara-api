@@ -1201,14 +1201,45 @@ def _build_bi_context() -> str:
     # Fahrzeug-Statistiken
     try:
         raw_veh = _MEM_CACHE.get('sale/vehicles')
+        if not raw_veh:
+            # Fallback: Versuche aus dem Cache zu laden falls MEM_CACHE leer
+            raw_veh = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/", force_fetch=False)
+
         if raw_veh:
             vs = build_vehicle_stats(raw_veh)
-            lines.append(f"\nFahrzeugbestand:")
-            lines.append(f"  Verkaufbar: {vs.get('verkaufbar', '?')}")
-            lines.append(f"  Verkauft: {vs.get('verkauft', '?')}")
-            lines.append(f"  Gesamt (unique): {vs.get('unique_total', '?')}")
-    except Exception:
-        pass
+            lines.append(f"\nFAHRZEUGBESTAND (Statistiken):")
+            lines.append(f"  Verkaufbar (Bestand): {vs.get('verkaufbar', '?')}")
+            lines.append(f"  Verkauft (Historie): {vs.get('verkauft', '?')}")
+            lines.append(f"  Gesamt (Eindeutig): {vs.get('unique_total', '?')}")
+            lines.append(f"  Durchschnittspreis: {vs.get('avg_preis', 0):,} €")
+
+            if vs.get('getriebe'):
+                g = vs['getriebe']
+                lines.append(f"  Getriebe: Automatik: {g.get('Automatik', 0)}, Schaltung: {g.get('Schaltung', 0)}")
+
+            if vs.get('nach_typ'):
+                lines.append("  Nach Typ:")
+                for t, c in vs['nach_typ'].items():
+                    lines.append(f"    {t}: {c}")
+
+            if vs.get('heizung'):
+                h = vs['heizung']
+                lines.append(f"  Heizung: Gas: {h.get('Gas', 0)}, Diesel: {h.get('Diesel', 0)}")
+
+            if vs.get('preis_buckets'):
+                lines.append("  Preisklassen:")
+                for b, c in vs['preis_buckets'].items():
+                    lines.append(f"    {b}: {c}")
+
+            if vs.get('laenge_buckets'):
+                lines.append("  Längenklassen:")
+                for b, c in vs['laenge_buckets'].items():
+                    lines.append(f"    {b}: {c}")
+
+            # Zusätzlicher Hinweis für die KI
+            lines.append("\nHinweis: Nutze diese aggregierten Daten für Bestandsabfragen. Deine Datenbasis ist aktuell.")
+    except Exception as e:
+        lines.append(f"\n(Fehler beim Laden der Fahrzeug-Statistiken: {str(e)})")
 
     return "\n".join(lines)
 

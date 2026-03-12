@@ -4,3 +4,4 @@ __pycache__/
 cache/
 *.json
 !requirements.txt
+!employee_names.json
