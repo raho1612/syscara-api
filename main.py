@@ -1238,13 +1238,34 @@ def _build_bi_context() -> str:
 
             if vs.get('ps_counts'):
                 lines.append("  Motorisierung (PS):")
-                # Sortiere nach Häufigkeit (die wichtigsten zuerst)
                 sorted_ps = sorted(vs['ps_counts'].items(), key=lambda x: x[1], reverse=True)
-                for ps_label, count in sorted_ps[:10]: # Top 10 PS-Stärken
+                for ps_label, count in sorted_ps[:15]: 
                     lines.append(f"    {ps_label}: {count}")
 
+            if vs.get('make_counts'):
+                lines.append("\n  Hersteller (Marken):")
+                sorted_makes = sorted(vs['make_counts'].items(), key=lambda x: x[1], reverse=True)
+                for make, count in sorted_makes:
+                    lines.append(f"    {make}: {count}")
+
+            if vs.get('year_counts'):
+                lines.append("\n  Modelljahre:")
+                sorted_years = sorted(vs['year_counts'].items(), key=lambda x: x[0], reverse=True)
+                for yr, count in sorted_years:
+                    lines.append(f"    {yr}: {count}")
+
+            if vs.get('sleeping_counts'):
+                lines.append("\n  Schlafplätze:")
+                sorted_sleep = sorted(vs['sleeping_counts'].items(), key=lambda x: x[0])
+                for sl, count in sorted_sleep:
+                    lines.append(f"    {sl}: {count}")
+
+            if vs.get('condition_counts'):
+                c = vs['condition_counts']
+                lines.append(f"\n  Zustand: NEU: {c.get('NEU',0)}, GEBRAUCHT: {c.get('GEBRAUCHT',0)}")
+
             # Zusätzlicher Hinweis für die KI
-            lines.append("\nHinweis: Nutze diese aggregierten Daten für Bestandsabfragen. Deine Datenbasis ist aktuell.")
+            lines.append("\nHinweis: Nutze diese aggregierten Daten für alle Bestandsabfragen. Erfinde keine Daten.")
     except Exception as e:
         lines.append(f"\n(Fehler beim Laden der Fahrzeug-Statistiken: {str(e)})")
 

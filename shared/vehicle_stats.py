@@ -197,16 +197,44 @@ def build_vehicle_stats(
 
         has_hub_bed = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
         has_dinette = "dinette" in features
-        has_shower = "sep_dusche" in features or "dusche" in features
-
+        
         stats["hubbett"]["Ja" if has_hub_bed else "Nein"] += 1
         stats["dinette"]["Ja" if has_dinette else "Nein"] += 1
         stats["dusche"]["Ja" if has_shower else "Nein"] += 1
 
+        # --- NEU: Universelle Datenextraktion für KI-Analyst ---
+        
+        # 1. PS
         ps = engine.get("power", 0) or 0
         if ps:
             ps_key = f"{ps} PS"
             stats["ps_counts"][ps_key] = stats["ps_counts"].get(ps_key, 0) + 1
+
+        # 2. Marken (Hersteller)
+        make = str(vehicle.get("make", "Unbekannt")).strip()
+        if make:
+            stats.setdefault("make_counts", {})
+            stats["make_counts"][make] = stats["make_counts"].get(make, 0) + 1
+
+        # 3. Modelljahre
+        year = str(vehicle.get("modelljahr") or (vehicle.get("model") or {}).get("modelyear") or "").strip()
+        if year and year != "0":
+            stats.setdefault("year_counts", {})
+            stats["year_counts"][year] = stats["year_counts"].get(year, 0) + 1
+
+        # 4. Schlafplätze
+        beds_d = vehicle.get("beds") or {}
+        sleeping = str(beds_d.get("sleeping") or "0")
+        if sleeping != "0":
+            stats.setdefault("sleeping_counts", {})
+            stats["sleeping_counts"][f"{sleeping} Schlafplätze"] = stats["sleeping_counts"].get(f"{sleeping} Schlafplätze", 0) + 1
+
+        # 5. Zustand (NEW / USED)
+        zustand = str(vehicle.get("condition", "Unbekannt")).upper()
+        stats.setdefault("condition_counts", {"NEU": 0, "GEBRAUCHT": 0, "UNBEKANNT": 0})
+        if "NEW" in zustand: stats["condition_counts"]["NEU"] += 1
+        elif "USED" in zustand: stats["condition_counts"]["GEBRAUCHT"] += 1
+        else: stats["condition_counts"]["UNBEKANNT"] += 1
 
     stats["verkaufbar"] = marketable_items
     stats["verfügbar"] = marketable_items
