@@ -68,12 +68,23 @@ def _is_claude_model_not_found(error_text):
         or "404" in normalized
     )
 
-# Lade zuerst die lokale .env, dann die Root-.env (enthält OPENAI_API_KEY etc.)
-_ROOT_ENV = Path(__file__).resolve().parents[1] / ".env"
-load_dotenv()
-load_dotenv(dotenv_path=_ROOT_ENV, override=False)
-
 CURRENT_DIR = Path(__file__).resolve().parent
+
+def _discover_workspace_root() -> Path:
+    for candidate in [CURRENT_DIR.parent, *CURRENT_DIR.parents]:
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return CURRENT_DIR.parent
+
+WORKSPACE_ROOT = _discover_workspace_root()
+ROOT_DIR = Path(os.getenv("APP_DATA_ROOT") or str(WORKSPACE_ROOT))
+
+# Lade zuerst die lokale .env, dann bekannte Root-.env Kandidaten (enthält OPENAI_API_KEY etc.)
+load_dotenv()
+for env_path in (CURRENT_DIR / ".env", CURRENT_DIR.parent / ".env", WORKSPACE_ROOT / ".env"):
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+
 SHARED_IMPORT_ROOTS = [
     CURRENT_DIR,
     CURRENT_DIR.parent / "syscara-dashboard",
@@ -97,6 +108,7 @@ CORS(app, origins=[
 SYSCARA_BASE  = "https://api.syscara.com"
 USER          = os.getenv("SYSCARA_API_USER")
 PASS          = os.getenv("SYSCARA_API_PASS")
+API_VERSION   = os.getenv("SYSCARA_API_VERSION", "v1.0.0")
 
 # Supabase Konfig
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -172,6 +184,27 @@ def extract_order_datetime(order_item):
 def fmt_preis(preis):
     if not preis: return '-'
     return f"{preis:,.2f} €".replace(',', 'X').replace('.', ',').replace('X', '.')
+
+def _candidate_file_paths(filename, env_var=None):
+    """Gibt Kandidaten-Pfade zurück, wo eine Datendatei liegen könnte."""
+    candidates = []
+    if env_var:
+        override = os.getenv(env_var)
+        if override:
+            candidates.append(Path(override))
+    candidates.extend([
+        ROOT_DIR / filename,
+        CURRENT_DIR / filename,
+        Path('/data') / filename,
+    ])
+    seen = set()
+    result = []
+    for p in candidates:
+        key = str(p.resolve())
+        if key not in seen:
+            seen.add(key)
+            result.append(p)
+    return result
 
 # ─── Chunking Logik für Supabase ──────────────────────────────────────────────
 
@@ -302,7 +335,7 @@ def _qcache_put(q: str, response: dict):
 
 # Lokale JSON-Fallback-Dateien (Pfade relativ zum Workspace-Root)
 _LOCAL_FALLBACKS = {
-    "sale/orders": Path(__file__).resolve().parents[1] / "orders.json",
+    "sale/orders": ROOT_DIR / "orders.json",
 }
 
 def _load_local_fallback(endpoint_name):
@@ -406,6 +439,48 @@ def map_and_filter(raw, filters, with_photos=False):
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
         has_auto = gear_raw == 'AUTOMATIC'
         condition = str(v.get('condition', '')).upper()
+
+        if filters:
+            if filters.get('art') and filters.get('art') != 'alle' and filters.get('art').lower() != art_label: continue
+            zustand_filter = (filters.get('zustand') or '').lower()
+            if zustand_filter and zustand_filter != 'alle':
+                if zustand_filter == 'neu' and condition != 'NEW': continue
+                if zustand_filter == 'gebraucht' and condition == 'NEW': continue
+            if filters.get('psMin') and ps < int(filters.get('psMin')): continue
+            if filters.get('psMax') and ps > int(filters.get('psMax')): continue
+            if filters.get('preisMin') and preis < int(filters.get('preisMin')): continue
+            if filters.get('preisMax') and preis > int(filters.get('preisMax')): continue
+            if filters.get('jahrMin') and modelljahr < int(filters.get('jahrMin')): continue
+            if filters.get('jahrMax') and modelljahr > int(filters.get('jahrMax')): continue
+            
+            gw = filters.get('gewicht')
+            if gw and gw != 'alle':
+                tonnen = gewicht_kg / 1000.0
+                if gw == 'bis35' and tonnen > 3.5: continue
+                if gw == '35bis45' and (tonnen <= 3.5 or tonnen > 4.5): continue
+                if gw == 'ueber45' and tonnen <= 4.5: continue
+
+            if filters.get('laengeMin') and laenge < float(filters.get('laengeMin')) * 100: continue
+            if filters.get('laengeMax') and laenge > float(filters.get('laengeMax')) * 100: continue
+            if filters.get('schlafplaetzeMin') and schlafplaetze < int(filters.get('schlafplaetzeMin')): continue
+            
+            if filters.get('festbett') == 'ja' and not has_festbett: continue
+            if filters.get('festbett') == 'nein' and has_festbett: continue
+            if filters.get('dusche') == 'ja' and not has_dusche: continue
+            if filters.get('dusche') == 'nein' and has_dusche: continue
+            if filters.get('klima') == 'ja' and not has_klima: continue
+            if filters.get('klima') == 'nein' and has_klima: continue
+
+            ht = filters.get('heizung')
+            if ht and ht != 'alle':
+                if ht == 'gas' and 'GAS' not in heating_type: continue
+                if ht == 'diesel' and 'DIESEL' not in heating_type: continue
+
+            gt = filters.get('getriebe')
+            if gt and gt != 'alle':
+                if gt == 'automatik' and not has_auto: continue
+                if gt == 'schaltung' and has_auto: continue
+
         obj = {
             "id": v.get('id'),
             "hersteller": model.get('producer', '-'),
@@ -438,29 +513,107 @@ def map_and_filter(raw, filters, with_photos=False):
 @app.route('/')
 def index(): return send_file('fahrzeugsuche_local.html')
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok"})
+
+@app.route('/api/diag', methods=['GET'])
+def api_diag():
+    orders_fallback_candidates = _candidate_file_paths('orders.json', 'ORDERS_JSON_PATH')
+    orders_fallback_found = [str(p) for p in orders_fallback_candidates if p.exists()]
+    employee_names_path = Path(os.getenv('EMPLOYEE_NAMES_PATH', str(ROOT_DIR / 'employee_names.json')))
+
+    return jsonify({
+        "success": True,
+        "service": "syscara-python-backend",
+        "api_version": API_VERSION,
+        "python": sys.version,
+        "cwd": str(Path.cwd()),
+        "root_dir": str(ROOT_DIR),
+        "has_openai_lib": HAS_OPENAI,
+        "has_claude_lib": HAS_CLAUDE,
+        "has_gemini_lib": HAS_GEMINI,
+        "has_openai_key": bool(os.getenv('OPENAI_API_KEY')),
+        "has_anthropic_key": bool(os.getenv('ANTHROPIC_API_KEY')),
+        "has_gemini_key": bool(os.getenv('GEMINI_API_KEY') or os.getenv('GOOGLE_API_KEY')),
+        "has_supabase_url": bool(SUPABASE_URL),
+        "has_supabase_key": bool(SUPABASE_KEY),
+        "employee_names_path": str(employee_names_path),
+        "employee_names_exists": employee_names_path.exists(),
+        "orders_fallback_candidates": [str(p) for p in orders_fallback_candidates],
+        "orders_fallback_found": orders_fallback_found,
+        "routes": sorted(str(r.rule) for r in app.url_map.iter_rules()),
+    })
+
 @app.route('/api/ads', methods=['POST'])
 def api_ads():
     raw = get_cached_or_fetch('sale/ads', f"{SYSCARA_BASE}/sale/ads/")
-    return jsonify({"success": True, "count": len(iter_items(raw)), "vehicles": map_and_filter(raw, {})})
+    filters = request.get_json(silent=True) or {}
+    vehicles = map_and_filter(raw, filters)
+    return jsonify({"success": True, "count": len(vehicles), "vehicles": vehicles})
 
 @app.route('/api/vehicles', methods=['GET', 'POST'])
 def api_vehicles():
+    year = request.args.get('year')
+    if year and year != 'alle':
+        url = f"{SYSCARA_BASE}/sale/vehicles/?modelyear={year}"
+        print(f"Direct Year Fetch for Vehicles: {url}", flush=True)
+        try:
+            r = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            items = iter_items(data)
+            return jsonify({"success": True, "count": len(items), "vehicles": items})
+        except Exception as e:
+            print(f"[ERROR] Direct Year Fetch failed: {e}", flush=True)
+
     raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
     items = iter_items(raw)
-    try:
-        print(f"[DEBUG] /api/vehicles -> items: {len(items)}", flush=True)
-        if items:
-            print(f"[DEBUG] first vehicle sample: {str(items[0])[:200]}", flush=True)
-    except Exception:
-        pass
-    return jsonify({"success": True, "vehicles": items})
+
+    if year and year != 'alle':
+        try:
+            filtered = []
+            for v in items:
+                y = v.get('modelljahr') or (v.get('model') or {}).get('modelyear')
+                if str(y) == str(year):
+                    filtered.append(v)
+            items = filtered
+        except:
+            pass
+
+    return jsonify({"success": True, "count": len(items), "vehicles": items})
 
 @app.route('/api/orders', methods=['GET', 'POST'])
 def api_orders():
+    year = request.args.get('year')
+    if year and year != 'alle':
+        url = f"{SYSCARA_BASE}/sale/orders/?update={year}-01-01"
+        print(f"Direct Year Fetch for Orders: {url}", flush=True)
+        try:
+            r = requests.get(url, auth=HTTPBasicAuth(USER, PASS), timeout=60)
+            r.raise_for_status()
+            data = r.json()
+            items = normalize_collection_items(data, 'orders')
+            
+            try:
+                year_num = int(year)
+                filtered_items = []
+                for item in items:
+                    if not isinstance(item, dict): continue
+                    order_dt = extract_order_datetime(item)
+                    if order_dt and order_dt.year == year_num:
+                        filtered_items.append(item)
+                items = filtered_items
+            except Exception:
+                pass
+
+            return jsonify({"success": True, "count": len(items), "orders": items})
+        except Exception as e:
+            print(f"[ERROR] Direct Year Fetch failed: {e}", flush=True)
+
     raw = get_cached_or_fetch('sale/orders', f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01")
     items = normalize_collection_items(raw, 'orders')
 
-    year = request.args.get('year')
     if year and year != 'alle':
         try:
             year_num = int(year)
@@ -477,12 +630,6 @@ def api_orders():
                     filtered_items.append(item)
             items = filtered_items
 
-    try:
-        print(f"[DEBUG] /api/orders -> items: {len(items)}", flush=True)
-        if items:
-            print(f"[DEBUG] first order sample: {str(items[0])[:200]}", flush=True)
-    except Exception:
-        pass
     return jsonify({"success": True, "count": len(items), "orders": items})
 
 @app.route('/api/equipment', methods=['GET', 'POST'])
@@ -730,6 +877,9 @@ def sync_all_now():
 
 def background_sync_loop():
     time.sleep(5)
+    while True:
+        sync_all_now()
+        time.sleep(3600)
 
 
 @app.route('/api/sync', methods=['GET', 'POST'])
@@ -745,9 +895,6 @@ def api_sync():
         return jsonify({"success": True, "message": "Background sync started"})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-    while True:
-        sync_all_now()
-        time.sleep(3600)
 
 def start_sync_thread():
     if not supabase: return
@@ -910,6 +1057,64 @@ def api_evaluate_claude():
         if "rate" in err_str.lower() or "429" in err_str:
             return jsonify({"success": False, "error": "⚠️ Zu viele Anfragen – bitte kurz warten und erneut versuchen."}), 429
         return jsonify({"success": False, "error": f"Claude-Fehler: {err_str}"}), 500
+
+
+@app.route('/api/evaluate-gemini', methods=['POST'])
+def api_evaluate_gemini():
+    """Fahrzeugbewertung via Google Gemini.
+
+    Sicherheitsdesign (Prompt-Injection-Schutz):
+    - 'instruction' landet ausschliesslich im system_instruction-Parameter.
+    - 'data' (Nutzereingabe) landet im user-Message-Teil – strikt getrennt.
+    """
+    if not HAS_GEMINI:
+        return jsonify({"success": False, "error": "google-generativeai Bibliothek nicht installiert. Bitte 'pip install google-generativeai' ausführen."}), 503
+
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({"success": False, "error": "Ungültige Anfrage."}), 400
+
+    vehicle_data = str(body.get('data', '')).strip()
+    instruction = str(body.get('instruction', '')).strip()
+
+    if not vehicle_data:
+        return jsonify({"success": False, "error": "Keine Fahrzeugdaten übergeben."}), 400
+
+    if not instruction:
+        instruction = (
+            "Handle als Senior-Fahrzeugexperte für Reisemobile. Analysiere die freien Daten des Nutzers. "
+            "Erstelle eine Marktwert-Tabelle (Händler, Privat, Ankauf) Stand 2026. "
+            "Strukturiere die Antwort zwingend in: 1. Konfiguration (Wert der Extras), "
+            "2. Validierung (Vergleich zum aktuellen Markt). 3. Marktlage. "
+            "Antworte präzise, direkt und ehrlich. "
+            "Ohne die Informationen von Reisemobile-MKK mit einzubeziehen."
+        )
+
+    vehicle_data = vehicle_data[:5000]
+    instruction = instruction[:3000]
+
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return jsonify({"success": False, "error": "GEMINI_API_KEY (oder GOOGLE_API_KEY) nicht konfiguriert."}), 503
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            system_instruction=instruction,
+        )
+        response = model.generate_content(f"Fahrzeugdaten zur Bewertung:\n\n{vehicle_data}")
+        text = response.text or "Keine Antwort erhalten."
+        return jsonify({"success": True, "text": text})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        err_str = str(e)
+        if "quota" in err_str.lower() or "429" in err_str:
+            return jsonify({"success": False, "error": "⚠️ Gemini-Kontingent erschöpft oder zu viele Anfragen."}), 429
+        if "api_key" in err_str.lower() or "permission" in err_str.lower() or "401" in err_str or "403" in err_str:
+            return jsonify({"success": False, "error": "⚠️ Ungültiger Gemini API-Key. Bitte in der .env-Datei prüfen."}), 401
+        return jsonify({"success": False, "error": f"Gemini-Fehler: {err_str}"}), 500
 
 
 # ─── KI-Analyst Hilfsfunktionen ───────────────────────────────────────────────
@@ -1110,13 +1315,13 @@ def _execute_local_customer_query(params: dict) -> tuple:
 
 def _load_employee_names() -> dict:
     """Lädt employee_names.json wenn vorhanden. Gibt {id_str: name} zurück."""
-    emp_file = Path(__file__).resolve().parents[1] / "employee_names.json"
-    if emp_file.exists():
-        try:
-            with open(emp_file, "r", encoding="utf-8") as f:
-                return __import__("json").load(f)
-        except Exception:
-            pass
+    for emp_file in _candidate_file_paths("employee_names.json", "EMPLOYEE_NAMES_PATH"):
+        if emp_file.exists():
+            try:
+                with open(emp_file, "r", encoding="utf-8") as f:
+                    return __import__("json").load(f)
+            except Exception:
+                pass
     return {}
 
 

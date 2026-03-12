@@ -3,3 +3,7 @@ python-dotenv
 flask
 flask-cors
 supabase
+google-generativeai
+openai
+anthropic
+httpx
