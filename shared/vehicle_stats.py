@@ -90,6 +90,7 @@ def build_vehicle_stats(
         "hubbett": dict(BOOLEAN_BUCKETS),
         "dinette": dict(BOOLEAN_BUCKETS),
         "dusche": dict(BOOLEAN_BUCKETS),
+        "ps_counts": {},
         "gesamt": len(deduped_items),
         "verkaufbar": 0,
         "verfügbar": 0,
@@ -201,6 +202,11 @@ def build_vehicle_stats(
         stats["hubbett"]["Ja" if has_hub_bed else "Nein"] += 1
         stats["dinette"]["Ja" if has_dinette else "Nein"] += 1
         stats["dusche"]["Ja" if has_shower else "Nein"] += 1
+
+        ps = engine.get("power", 0) or 0
+        if ps:
+            ps_key = f"{ps} PS"
+            stats["ps_counts"][ps_key] = stats["ps_counts"].get(ps_key, 0) + 1
 
     stats["verkaufbar"] = marketable_items
     stats["verfügbar"] = marketable_items

@@ -1236,6 +1236,13 @@ def _build_bi_context() -> str:
                 for b, c in vs['laenge_buckets'].items():
                     lines.append(f"    {b}: {c}")
 
+            if vs.get('ps_counts'):
+                lines.append("  Motorisierung (PS):")
+                # Sortiere nach Häufigkeit (die wichtigsten zuerst)
+                sorted_ps = sorted(vs['ps_counts'].items(), key=lambda x: x[1], reverse=True)
+                for ps_label, count in sorted_ps[:10]: # Top 10 PS-Stärken
+                    lines.append(f"    {ps_label}: {count}")
+
             # Zusätzlicher Hinweis für die KI
             lines.append("\nHinweis: Nutze diese aggregierten Daten für Bestandsabfragen. Deine Datenbasis ist aktuell.")
     except Exception as e:
