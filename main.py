@@ -859,7 +859,7 @@ def sync_all_now():
     # REIHENFOLGE: Kleine Pakete zuerst
     endpoints = {
         "sale/equipment": f"{SYSCARA_BASE}/sale/equipment/",
-        "sale/orders":    f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01",
+        "sale/orders":    f"{SYSCARA_BASE}/sale/orders/?update=2025-01-01",
         "sale/lists":     f"{SYSCARA_BASE}/sale/lists/?list=pictures",
         "sale/vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
         "sale/ads":       f"{SYSCARA_BASE}/sale/ads/"
@@ -879,7 +879,7 @@ def background_sync_loop():
     time.sleep(5)
     while True:
         sync_all_now()
-        time.sleep(3600)
+        time.sleep(43200) # Alle 12 Stunden syncen (12 * 3600)
 
 
 @app.route('/api/sync', methods=['GET', 'POST'])
