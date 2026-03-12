@@ -1203,7 +1203,7 @@ def _build_bi_context() -> str:
         raw_veh = _MEM_CACHE.get('sale/vehicles')
         if not raw_veh:
             # Fallback: Versuche aus dem Cache zu laden falls MEM_CACHE leer
-            raw_veh = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/", force_fetch=False)
+            raw_veh = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
 
         if raw_veh:
             vs = build_vehicle_stats(raw_veh)
@@ -1231,10 +1231,11 @@ def _build_bi_context() -> str:
                 for b, c in vs['preis_buckets'].items():
                     lines.append(f"    {b}: {c}")
 
-            if vs.get('laenge_buckets'):
-                lines.append("  Längenklassen:")
-                for b, c in vs['laenge_buckets'].items():
-                    lines.append(f"    {b}: {c}")
+            if vs.get('exact_lengths'):
+                lines.append("  Exakte Längen (Top 10):")
+                sorted_l = sorted(vs['exact_lengths'].items(), key=lambda x: x[1], reverse=True)
+                for l_label, count in sorted_l[:10]:
+                    lines.append(f"    {l_label}: {count}")
 
             if vs.get('ps_counts'):
                 lines.append("  Motorisierung (PS):")

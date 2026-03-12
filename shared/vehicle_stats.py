@@ -214,6 +214,12 @@ def build_vehicle_stats(
         if ps:
             ps_key = f"{ps} PS"
             stats["ps_counts"][ps_key] = stats["ps_counts"].get(ps_key, 0) + 1
+            
+        # 1b. Exakte Längen
+        if length:
+            l_key = f"{length}cm"
+            stats.setdefault("exact_lengths", {})
+            stats["exact_lengths"][l_key] = stats["exact_lengths"].get(l_key, 0) + 1
 
         # 2. Marken (Hersteller)
         make = str(vehicle.get("make", "Unbekannt")).strip()
