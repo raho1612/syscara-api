@@ -168,6 +168,11 @@ def build_vehicle_stats(
             else:
                 length_bucket = "> 8m"
             stats["laenge_buckets"][length_bucket] += 1
+            
+            # NEU: Matrix für hochspezifische Anfragen (z.B. Kastenwagen 540)
+            stats.setdefault("type_length_matrix", {})
+            matrix_key = f"{art_label} {length}cm"
+            stats["type_length_matrix"][matrix_key] = stats["type_length_matrix"].get(matrix_key, 0) + 1
 
         features = vehicle.get("features")
         if not isinstance(features, list):

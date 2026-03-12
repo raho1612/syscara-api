@@ -1264,8 +1264,15 @@ def _build_bi_context() -> str:
                 c = vs['condition_counts']
                 lines.append(f"\n  Zustand: NEU: {c.get('NEU',0)}, GEBRAUCHT: {c.get('GEBRAUCHT',0)}")
 
+            if vs.get('type_length_matrix'):
+                lines.append("\n  Spezifische Kombinationen (Typ + Länge):")
+                # Top 20 Kombinationen für Präzision (z.B. Kastenwagen 540cm)
+                sorted_matrix = sorted(vs['type_length_matrix'].items(), key=lambda x: x[1], reverse=True)
+                for combo, count in sorted_matrix[:20]:
+                    lines.append(f"    {combo}: {count}")
+
             # Zusätzlicher Hinweis für die KI
-            lines.append("\nHinweis: Nutze diese aggregierten Daten für alle Bestandsabfragen. Erfinde keine Daten.")
+            lines.append("\nHinweis: Nutze diese aggregierten Daten für alle Bestandsabfragen. Antworte präzise auf Längenabfragen (z.B. 5,40m = 540cm).")
     except Exception as e:
         lines.append(f"\n(Fehler beim Laden der Fahrzeug-Statistiken: {str(e)})")
 
