@@ -12,22 +12,38 @@ def _candidate_file_paths(filename):
 def _load_employee_names() -> dict:
     import os
     env_path = os.getenv("EMPLOYEE_NAMES_PATH")
-    if env_path and os.path.exists(env_path):
-        try:
-            with open(env_path, "r", encoding="utf-8") as f: return json.load(f)
-        except: pass
+    if env_path:
+        print(f"[DEBUG] Checking EMPLOYEE_NAMES_PATH: {env_path}", flush=True)
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, "r", encoding="utf-8") as f: 
+                    data = json.load(f)
+                    print(f"[DEBUG] Loaded {len(data)} names from {env_path}", flush=True)
+                    return data
+            except Exception as e: 
+                print(f"[ERROR] Loading {env_path}: {e}", flush=True)
 
     local_path = Path(__file__).resolve().parent.parent / "employee_names.json"
+    print(f"[DEBUG] Checking local path: {local_path}", flush=True)
     if local_path.exists():
         try:
-            with open(local_path, "r", encoding="utf-8") as f: return json.load(f)
-        except: pass
+            with open(local_path, "r", encoding="utf-8") as f: 
+                data = json.load(f)
+                print(f"[DEBUG] Loaded {len(data)} names from {local_path}", flush=True)
+                return data
+        except Exception as e: 
+            print(f"[ERROR] Loading {local_path}: {e}", flush=True)
 
     for emp_file in _candidate_file_paths("employee_names.json"):
+        print(f"[DEBUG] Checking candidate path: {emp_file}", flush=True)
         if emp_file.exists():
             try:
-                with open(emp_file, "r", encoding="utf-8") as f: return json.load(f)
+                with open(emp_file, "r", encoding="utf-8") as f: 
+                    data = json.load(f)
+                    print(f"[DEBUG] Loaded {len(data)} names from {emp_file}", flush=True)
+                    return data
             except: pass
+    print("[WARNING] No employee_names.json found in any expected location!", flush=True)
     return {}
 
 def extract_employee_name(o_item, _emp_names):
@@ -36,10 +52,13 @@ def extract_employee_name(o_item, _emp_names):
     names = []
     for key in ('order', 'update', 'id'):
         v = u.get(key)
-        if v and str(v).isdigit(): ids.append(str(v))
+        if v:
+            # Handle float IDs (e.g. 1582.0) and convert to clean string
+            s_v = str(v).split('.')[0]
+            if s_v.isdigit(): ids.append(s_v)
     for key in ('full_name', 'name', 'display_name', 'username'):
         v = u.get(key)
-        if v and isinstance(v, str) and v.strip() and not v.strip().isdigit():
+        if v and isinstance(v, str) and v.strip() and not v.strip().split('.')[0].isdigit():
             names.append(v.strip())
     for key in ('responsible', 'seller', 'sales_person'):
         v = o_item.get(key)
