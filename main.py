@@ -6,6 +6,7 @@ from core.database import supabase
 from api.ai_analyst import register_ai_analyst_routes
 from api.performance import register_performance_routes
 from api.vehicles import register_vehicle_routes
+from api.evaluation import register_evaluation_routes
 from services.sync_service import start_sync_thread, register_sync_routes
 
 # Initialisierung
@@ -16,6 +17,7 @@ CORS(app, origins=["*"]) # Vereinfacht für maximale Erreichbarkeit
 register_ai_analyst_routes(app)
 register_performance_routes(app)
 register_vehicle_routes(app)
+register_evaluation_routes(app)
 register_sync_routes(app)
 
 @app.route('/api/health')

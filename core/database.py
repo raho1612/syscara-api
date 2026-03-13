@@ -31,6 +31,23 @@ _QUESTION_CACHE = {}
 _QUESTION_CACHE_TTL_LOCAL = 3600
 _QUESTION_CACHE_TTL_BI    = 600
 
+def _qcache_key(q: str) -> str:
+    return q.strip().lower()
+
+def _qcache_get(q: str) -> dict | None:
+    key = _qcache_key(q)
+    entry = _QUESTION_CACHE.get(key)
+    if not entry: return None
+    ttl = _QUESTION_CACHE_TTL_LOCAL if entry.get('source') == 'local' else _QUESTION_CACHE_TTL_BI
+    if time.time() - entry['ts'] < ttl: return entry['response']
+    del _QUESTION_CACHE[key]; return None
+
+def _qcache_put(q: str, response: dict):
+    key = _qcache_key(q)
+    _QUESTION_CACHE[key] = {'ts': time.time(), 'response': response, 'source': response.get('source', 'openai')}
+    if len(_QUESTION_CACHE) > 200:
+        for k in sorted(_QUESTION_CACHE.items(), key=lambda x: x[1]['ts'])[:40]: _QUESTION_CACHE.pop(k[0], None)
+
 def iter_items(raw):
     if isinstance(raw, dict): return list(raw.values())
     if isinstance(raw, list): return raw
