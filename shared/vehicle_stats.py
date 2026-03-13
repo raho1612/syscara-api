@@ -193,10 +193,10 @@ def build_vehicle_stats(
         else:
             stats["heizung"]["Unbekannt"] += 1
 
-        gear = str(engine.get("gear", "") or engine.get("gearbox", "")).upper()
-        if gear == "AUTOMATIC":
+        gear_raw = str(engine.get("gear", "") or engine.get("gearbox", "") or "").upper()
+        if any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"]):
             stats["getriebe"]["Automatik"] += 1
-        elif gear == "MANUAL":
+        elif any(x in gear_raw for x in ["MANUAL", "MAN", "SCHALTUNG", "SCHALTER"]):
             stats["getriebe"]["Schaltung"] += 1
         else:
             stats["getriebe"]["Unbekannt"] += 1
@@ -211,8 +211,8 @@ def build_vehicle_stats(
 
         # --- NEU: Universelle Datenextraktion für KI-Analyst ---
         
-        # 1. PS
-        ps = engine.get("power", 0) or 0
+        # 1. PS (prüfe sowohl power als auch ps Feld)
+        ps = engine.get("ps") or engine.get("power") or 0
         if ps:
             ps_key = f"{ps} PS"
             stats["ps_counts"][ps_key] = stats["ps_counts"].get(ps_key, 0) + 1

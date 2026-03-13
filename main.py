@@ -207,7 +207,9 @@ def _candidate_file_paths(filename, env_var=None):
             result.append(p)
     return result
 
-# ─── Chunking Logik für Supabase ──────────────────────────────────────────────
+# ─── Chunking Logik für Supabase & Lokaler Cache ──────────────────────────────
+CACHE_DIR = CURRENT_DIR / "cache"
+CACHE_DIR.mkdir(exist_ok=True)
 
 CHUNK_SIZE = 500 # Maximale Anzahl an Elementen pro Chunk
 
@@ -247,16 +249,19 @@ def save_to_supabase_chunked(endpoint_name, data):
             }).execute()
             print(f"  [CHUNK] {chunk_key} gespeichert ({end_idx-start_idx} Items).", flush=True)
         except Exception as dbe:
-            print(f"  [ERROR] Chunk {chunk_key} fehlgeschlagen: {dbe}", flush=True)
+            err_msg = str(dbe).lower()
+            if "quota" in err_msg or "limit" in err_msg or "429" in err_msg:
+                print(f"  [CRITICAL] Supabase Limit erreicht! Speichern von {chunk_key} abgebrochen.", flush=True)
+            else:
+                print(f"  [ERROR] Chunk {chunk_key} fehlgeschlagen: {dbe}", flush=True)
             return False
 
-    # Speichere Meta-Info, wie viele Chunks es gibt
+    # Lokaler Fallback: Speichere immer auch eine Kopie lokal auf Disk
     try:
-        supabase.table("api_cache").upsert({
-            "key": f"{endpoint_name}#meta",
-            "data": {"chunks": num_chunks, "is_dict": is_dict, "total_items": total_items},
-            "updated_at": timestamp
-        }).execute()
+        local_path = CACHE_DIR / f"{endpoint_name.replace('/', '_')}.json"
+        with open(local_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        print(f"  [CACHE] Lokal gesichert: {local_path}", flush=True)
     except: pass
 
     return True
@@ -296,7 +301,19 @@ def load_from_supabase_chunked(endpoint_name):
         return combined_dict if is_dict else combined_list
 
     except Exception as e:
-        print(f"[CACHE] Ladefehler aus Supabase: {e}", flush=True)
+        err_msg = str(e).lower()
+        if "quota" in err_msg or "limit" in err_msg:
+            print(f"[CACHE] Supabase Limit erreicht – Suche lokale Kopie...", flush=True)
+        else:
+            print(f"[CACHE] Ladefehler aus Supabase: {e}", flush=True)
+        
+        # Lokaler Fallback
+        local_path = CACHE_DIR / f"{endpoint_name.replace('/', '_')}.json"
+        if local_path.exists():
+            try:
+                with open(local_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except: pass
         return {}
 
 # ─── In-Memory Cache ──────────────────────────────────────────────────────────
