@@ -455,7 +455,9 @@ def map_and_filter(raw, filters, with_photos=False):
         heating_type = str(climate.get('heating_type', '')).upper()
         has_festbett = 'FRENCH_BED' in bed_types or 'SINGLE_BEDS' in bed_types
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
-        has_auto = gear_raw == 'AUTOMATIC'
+        # Flexiblere Erkennung für Regression-Sicherheit
+        has_auto = any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"])
+        has_manual = any(x in gear_raw for x in ["MANUAL", "MAN", "SCHALTUNG", "SCHALTER"])
         condition = str(v.get('condition', '')).upper()
 
         if filters:
@@ -494,7 +496,7 @@ def map_and_filter(raw, filters, with_photos=False):
             gt = filters.get('getriebe')
             if gt and gt != 'alle':
                 if gt == 'automatik' and not has_auto: continue
-                if gt == 'schaltung' and has_auto: continue
+                if gt == 'schaltung' and not has_manual: continue
 
         obj = {
             "id": v.get('id'),
@@ -1552,6 +1554,56 @@ def _execute_local_order_lookup(params: dict) -> tuple:
     return answer, table, None
 
 
+def _tool_query_vehicle_inventory(args: dict) -> str:
+    """Tool-Funktion für die KI: Ermöglicht punktgenaue Bestandsabfragen direkt in den Daten.
+    Diese Funktion ist strikt isoliert und dient nur dem KI-Analysten als Daten-Quelle.
+    """
+    from collections import Counter
+    try:
+        # Nutzt bestehende, validierte Cache-Logik
+        raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
+        if not raw:
+            return "Fehler: Fahrzeugdaten konnten nicht geladen werden (Supabase Limit oder Syscara offline)."
+            
+        # Nutzt bewährte Filter-Logik (map_and_filter)
+        # Die Längen-Parameter müssen von Metern in cm umgerechnet werden, da map_and_filter cm erwartet
+        if 'laengeMin' in args:
+            args['laengeMin'] = args['laengeMin'] * 100
+        if 'laengeMax' in args:
+            args['laengeMax'] = args['laengeMax'] * 100
+
+        vehicles = map_and_filter(raw, args)
+        
+        # Zusätzlicher Marken-Filter, da nicht nativ in map_and_filter
+        make_q = str(args.get('make') or '').strip().lower()
+        if make_q:
+            vehicles = [v for v in vehicles if make_q in v.get('hersteller', '').lower()]
+            
+        count = len(vehicles)
+        if count == 0:
+            return "Ergebnis: 0 Fahrzeuge gefunden. (Prüfe Filter: Getriebe, Preis, Typ)"
+            
+        prices = [v['preis'] for v in vehicles if v['preis'] > 0]
+        avg_preis = sum(prices) / len(prices) if prices else 0
+        
+        res = {
+            "treffer_anzahl": count,
+            "preis_durchschnitt": int(avg_preis),
+            "status": "Erfolg",
+            "hinweis": "Alle Daten basieren auf dem aktuellen Echtzeit-Bestand."
+        }
+        
+        # Detail-Liste für kleine Treffer-Mengen
+        if 0 < count <= 15:
+            res["beispiele"] = [{"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "getriebe": v['getriebe']} for v in vehicles]
+        else:
+            top_makes = Counter(v['hersteller'] for v in vehicles).most_common(5)
+            res["top_marken"] = dict(top_makes)
+            
+        return json.dumps(res, ensure_ascii=False)
+    except Exception as e:
+        return f"Technischer Fehler im Tool: {str(e)}"
+
 @app.route('/api/ask', methods=['POST'])
 def api_ask():
     """KI-Analyst: Beantwortet BI-Fragen via ChatGPT mit anonymisierten Unternehmensdaten.
@@ -1602,31 +1654,82 @@ def api_ask():
     # Aggregierte Statistiken als Kontext – KEINE personenbezogenen Daten
     bi_context = _build_bi_context()
 
+    # Definition der Tools für Function Calling ( OpenAI Beta Standards)
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "query_inventory",
+            "description": "Führt EXAKTE Abfragen im Fahrzeugbestand durch. Nutze dies für alle Fragen nach Bestandszahlen, Getriebearten, Preisen oder Marken.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "art": {"type": "string", "enum": ["kastenwagen", "integriert", "teilintegriert", "alkoven", "wohnwagen", "alle"]},
+                    "getriebe": {"type": "string", "enum": ["automatik", "schaltung", "alle"]},
+                    "zustand": {"type": "string", "enum": ["NEW", "USED", "alle"]},
+                    "preisMax": {"type": "number"},
+                    "preisMin": {"type": "number"},
+                    "psMin": {"type": "number"},
+                    "laengeMin": {"type": "number", "description": "Länge in METERN (z.B. 5.4 oder 6.0)"},
+                    "laengeMax": {"type": "number", "description": "Länge in METERN (z.B. 7.5)"},
+                    "make": {"type": "string", "description": "Markenname (z.B. Adria, Hymer)"}
+                }
+            }
+        }
+    }]
+
     system_prompt = (
         "Du bist ein intelligenter Business-Analyst für ein Reisemobil-Handelsunternehmen. "
-        "Du beantwortest Fragen zu Fahrzeugbestand, Aufträgen, Angeboten, KPIs und Mitarbeiter-Performance. "
-        "Antworte auf Deutsch, präzise und strukturiert. "
-        "Nutze ausschließlich die nachfolgenden Unternehmensdaten als Grundlage – erfinde keine Zahlen. "
+        "Du beantwortest Fragen zu Fahrzeugbestand, Aufträgen, KPIs und Mitarbeiter-Performance. "
+        "Wenn eine Frage nach Bestandszahlen gestellt wird (z.B. 'Wie viele...?'), nutze IMMER das Tool 'query_inventory'."
+        "Antworte präzise auf Deutsch. Erfinde keine Zahlen.\n\n"
         "Wenn eine Antwort von einem Balken- oder Kreisdiagramm profitieren würde, füge am Ende "
         "einen JSON-Block in exakt diesem Format ein (kein Markdown-Fence, nur der Block selbst):\n"
         "[CHART]{\"type\": \"bar\", \"title\": \"Titel\", \"data\": [{\"name\": \"Label\", \"value\": 42}]}[/CHART]\n"
-        "Füge diesen Block nur ein, wenn er echten Mehrwert bietet.\n\n"
-        f"{bi_context}"
+        f"Grobstatistik:\n{bi_context}"
     )
 
     try:
         import re as _re
         client = _openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": question},
+        ]
+        
+        # 1. Anfrage an OpenAI mit Tools
+        completion = client.chat.completions.create(
             model="gpt-4o",
-            max_tokens=1024,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": question},
-            ],
+            messages=messages,
+            tools=tools,
+            tool_choice="auto"
         )
-        raw = response.choices[0].message.content or ""
+        
+        choice = completion.choices[0].message
+        
+        # 2. Tool-Calls abarbeiten (Function Calling)
+        if choice.tool_calls:
+            messages.append(choice)
+            for tool_call in choice.tool_calls:
+                if tool_call.function.name == "query_inventory":
+                    fn_args = json.loads(tool_call.function.arguments)
+                    tool_res = _tool_query_vehicle_inventory(fn_args)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": "query_inventory",
+                        "content": tool_res
+                    })
+            
+            # Zweite Antwort generieren (jetzt mit den Daten aus dem Tool)
+            final_comp = client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages
+            )
+            raw = final_comp.choices[0].message.content or ""
+        else:
+            raw = choice.content or ""
 
+        # Chart-Extraktion
         chart = None
         chart_match = _re.search(r'\[CHART\](.*?)\[/CHART\]', raw, _re.DOTALL)
         if chart_match:
