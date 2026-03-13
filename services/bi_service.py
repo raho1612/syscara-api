@@ -62,8 +62,11 @@ def map_and_filter(raw, filters, with_photos=False):
                 if gw == '35bis45' and (tonnen <= 3.5 or tonnen > 4.5): continue
                 if gw == 'ueber45' and tonnen <= 4.5: continue
 
-            if filters.get('laengeMin') and laenge < float(filters.get('laengeMin')) * 100: continue
-            if filters.get('laengeMax') and laenge > float(filters.get('laengeMax')) * 100: continue
+            l_min = filters.get('laengeMin')
+            if l_min and laenge < float(l_min) * 100: continue
+            l_max = filters.get('laengeMax')
+            if l_max and laenge > float(l_max) * 100: continue
+            
             if filters.get('schlafplaetzeMin') and schlafplaetze < int(filters.get('schlafplaetzeMin')): continue
             
             if filters.get('festbett') == 'ja' and not has_festbett: continue
@@ -114,8 +117,7 @@ def _build_bi_context() -> str:
     lines = [f"=== UNTERNEHMENSDATEN (Stand: {_dt.date.today().strftime('%d.%m.%Y')}) ==="]
     try:
         items = _get_orders()
-    except:
-        items = []
+    except: items = []
 
     status_counts = Counter()
     year_counts = Counter()
@@ -126,13 +128,10 @@ def _build_bi_context() -> str:
         s = o.get('status', {})
         status = (s.get('key') or s.get('label')) if isinstance(s, dict) else str(s or '')
         if status: status_counts[status] += 1
-        date_obj = o.get('date', {})
-        created = (date_obj.get('created') or date_obj.get('create', '')) if isinstance(date_obj, dict) else ''
-        try:
-            year = int(str(created)[:4])
-            year_counts[year] += 1
-            if year == 2026: month_2026[str(created)[5:7]] += 1
-        except: pass
+        dt = extract_order_datetime(o)
+        if dt:
+            year_counts[dt.year] += 1
+            if dt.year == 2026: month_2026[str(dt.month).zfill(2)] += 1
         user = o.get('user', {})
         if isinstance(user, dict):
             emp_id = user.get('order') or user.get('update')
@@ -141,29 +140,51 @@ def _build_bi_context() -> str:
     lines.append(f"Aufträge gesamt: {len(items)}")
     for yr in sorted([y for y in year_counts if y >= 2023], reverse=True):
         lines.append(f"Aufträge {yr}: {year_counts[yr]}")
-    if status_counts:
-        lines.append("\nNach Status:")
-        for st, cnt in sorted(status_counts.items(), key=lambda x: -x[1]):
-            lines.append(f"  {st}: {cnt}")
+    
     if month_2026:
         lines.append("\nAufträge 2026 nach Monat:")
         for mon in sorted(month_2026.keys()):
             lines.append(f"  {mon}/2026: {month_2026[mon]}")
+            
     if employee_counts:
         emp_names_map = _load_employee_names()
         lines.append("\nTop 5 Mitarbeiter (Auftragsanzahl):")
         for emp_id, cnt in employee_counts.most_common(5):
             label = emp_names_map.get(str(emp_id), f'ID {emp_id}')
             lines.append(f"  {label}: {cnt} Aufträge")
+
+    # Fahrzeugbestand Details für "Gesamtintelligenz"
     try:
         raw_veh = _MEM_CACHE.get('sale/vehicles') or get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
         if raw_veh:
             vs = build_vehicle_stats(raw_veh)
-            lines.append(f"\nFahrzeugbestand:")
-            lines.append(f"  Verkaufbar: {vs.get('verkaufbar', '?')}")
-            lines.append(f"  Verkauft: {vs.get('verkauft', '?')}")
-            lines.append(f"  Gesamt (unique): {vs.get('unique_total', '?')}")
-    except: pass
+            lines.append(f"\nFAHRZEUGBESTAND:")
+            lines.append(f"  Gesamtbestand: {vs.get('unique_total', '?')} Fahrzeuge")
+            lines.append(f"  Verfügbar: {vs.get('verkaufbar', '?')} | Verkauft: {vs.get('verkauft', '?')}")
+            
+            # Typen
+            types = vs.get('nach_typ', {})
+            if types:
+                lines.append("  Nach Typ: " + ", ".join([f"{k}: {v}" for k, v in types.items()]))
+            
+            # Preisklassen
+            pb = vs.get('preis_buckets', {})
+            pb_list = [f"{k}: {v}" for k, v in pb.items() if v > 0]
+            if pb_list: lines.append("  Preisklassen: " + ", ".join(pb_list))
+            
+            # Längenklassen (Wichtig für die Benutzerfrage!)
+            lb = vs.get('laenge_buckets', {})
+            lb_list = [f"{k}: {v}" for k, v in lb.items() if v > 0]
+            if lb_list: lines.append("  Längenklassen: " + ", ".join(lb_list))
+            
+            # Top Marken
+            raw_items = iter_items(raw_veh)
+            makes = Counter([str(v.get('model', {}).get('producer', 'Unbekannt')) for v in raw_items]).most_common(8)
+            lines.append("  Top Marken: " + ", ".join([f"{m}: {c}" for m, c in makes]))
+            
+    except Exception as e:
+        lines.append(f"\n(Statistik-Fehler: {str(e)})")
+        
     return "\n".join(lines)
 
 def _detect_customer_query(question: str):
@@ -184,12 +205,10 @@ def _detect_customer_query(question: str):
     return False, {}
 
 def _execute_local_customer_query(params: dict) -> tuple:
-    try:
-        items = _get_orders()
+    try: items = _get_orders()
     except: return "Fehler: Auftragsdaten konnten nicht geladen werden.", None
     results = []
-    q_t = params.get('type')
-    val = params.get('value', '').lower().strip()
+    q_t = params.get('type'); val = params.get('value', '').lower().strip()
     for o in items:
         c = o.get('customer', {}) or {}
         if not isinstance(c, dict): continue
@@ -211,7 +230,6 @@ def _execute_local_customer_query(params: dict) -> tuple:
     answer = f"{total} Aufträge gefunden (lokal ermittelt, keine Daten an KI gesendet)"
     if total > 50: answer += f" — Tabelle zeigt die ersten 50 von {total}"
     table = {'columns': ['Auftrags-Nr.', 'Name', 'PLZ', 'Stadt', 'Status'], 'rows': [[r['nr'], r['name'], r['plz'], r['stadt'], r['status']] for r in capped]}
-    if total > 50: table['footer'] = f"… und {total - 50} weitere Einträge"
     return answer, table
 
 def _detect_order_lookup_query(question: str):
@@ -224,71 +242,51 @@ def _detect_order_lookup_query(question: str):
 
 def _execute_local_order_lookup(params: dict):
     order_nr = params.get('value', '').upper()
-    try:
-        orders = _get_orders()
+    try: orders = _get_orders()
     except: return "Fehler: Daten nicht ladbar.", None, None
     found = None
     for o in orders:
-        if _extract_order_nr(o).upper() == order_nr:
-            found = o; break
+        if _extract_order_nr(o).upper() == order_nr: found = o; break
     if not found: return f"Auftrag {order_nr} nicht gefunden.", None, None
     c = found.get('customer', {}) or {}
     cname = f"{c.get('first_name','')} {c.get('last_name','')}".strip()
-    city = c.get('city', '-')
-    s_obj = found.get('status', {})
+    city = c.get('city', '-'); s_obj = found.get('status', {})
     status = (s_obj.get('label') or s_obj.get('key') or 'Unbekannt') if isinstance(s_obj, dict) else str(s_obj or 'Unbekannt')
-    typ = found.get('type', 'Fahrzeug')
-    user = found.get('user', {}) or {}
-    uid = str(user.get('order') or user.get('update') or '')
+    user = found.get('user', {}) or {}; uid = str(user.get('order') or user.get('update') or '')
     emp_names = _load_employee_names()
     seller_name = emp_names.get(uid, f'ID {uid}' if uid else 'Unbekannt')
-    vin = (found.get('identifier', {}) or {}).get('vin')
     answer = f"Details zu Auftrag {order_nr}: {cname} aus {city}. Verkäufer: {seller_name}. Status: {status}."
-    table = {'columns': ['Feld', 'Wert'], 'rows': [['Auftrags-Nr.', order_nr], ['Verkäufer', f'{seller_name}' + (f' (ID: {uid})' if uid and uid not in seller_name else '')], ['Status', status], ['Typ', typ], ['Kunde', cname], ['Stadt', city], ['FIN/VIN', vin or '–']]}
+    table = {'columns': ['Feld', 'Wert'], 'rows': [['Auftrags-Nr.', order_nr], ['Verkäufer', seller_name], ['Status', status], ['Kunde', cname], ['Stadt', city]]}
     return answer, table, None
 
 def _detect_employee_query(question: str):
-    q = question.lower()
-    id_match = _re.search(r'(?:mitarbeiter|user|verkäufer|berater)\s*[:\s#]?\s*(\d{3,6})', q)
+    q = question.lower(); id_match = _re.search(r'(?:mitarbeiter|user|verkäufer|berater)\s*[:\s#]?\s*(\d{3,6})', q)
     if id_match:
         eid = id_match.group(1); emp_names = _load_employee_names()
         return True, {'type': 'employee_id', 'value': eid, 'name': emp_names.get(eid, f'#{eid}')}
     emp_names = _load_employee_names()
     if emp_names:
-        patterns = [r'auftr[äa]ge?\s+(?:von|durch|von\s+mitarbeiter)\s+([a-zäöüß]+(?:\s+[a-zäöüß]+)?)', r'(?:von|durch)\s+([a-zäöüß]+(?:\s+[a-zäöüß]+)?)\s+(?:auftr[äa]ge?|bearbeitet|erstellt)', r'(?:mitarbeiter|verkäufer|berater)\s+([a-zäöüß]{2,}(?:\s+[a-zäöüß]{2,})?)', r'was\s+hat\s+([a-zäöüß]{2,}(?:\s+[a-zäöüß]{2,})?)\s+(?:gemacht|verkauft|erstellt)']
+        patterns = [r'auftr[äa]ge?\s+(?:von|durch|von\s+mitarbeiter)\s+([a-zäöüß]+(?:\s+[a-zäöüß]+)?)', r'(?:von|durch)\s+([a-zäöüß]+(?:\s+[a-zäöüß]+)?)\s+(?:auftr[äa]ge?|bearbeitet|erstellt)']
         for pat in patterns:
             m = _re.search(pat, q)
             if m:
                 name_q = m.group(1).strip()
                 for eid, ename in emp_names.items():
-                    if name_q in ename.lower() or ename.lower().startswith(name_q[:4]):
-                        return True, {'type': 'employee_id', 'value': eid, 'name': ename}
-    if any(kw in q for kw in ['auftr', 'order', 'bearbeitet', 'erstellt', 'verkäufer', 'berater', 'mitarbeiter']):
-        m2 = _re.search(r'\b(\d{4,6})\b', question)
-        if m2:
-            eid = m2.group(1); emp_names = _load_employee_names()
-            return True, {'type': 'employee_id', 'value': eid, 'name': emp_names.get(eid, f'#{eid}')}
+                    if name_q in ename.lower(): return True, {'type': 'employee_id', 'value': eid, 'name': ename}
     return False, {}
 
 def _execute_local_employee_query(params: dict) -> tuple:
-    emp_id_str = str(params.get('value', ''))
-    emp_name = params.get('name', f'#{emp_id_str}')
+    emp_id_str = str(params.get('value', '')); emp_name = params.get('name', f'#{emp_id_str}')
     try: orders = _get_orders()
     except: return "Fehler: Daten nicht geladen.", None, None
     results = []; status_counts = {}
     for o in orders:
         user = o.get('user', {}) or {}
         if str(user.get('order') or user.get('update') or '') != emp_id_str: continue
-        s = o.get('status', {})
-        status = (s.get('key') or s.get('label') or '?') if isinstance(s, dict) else str(s or '?')
+        s = o.get('status', {}); status = (s.get('key') or s.get('label') or '?') if isinstance(s, dict) else str(s or '?')
         status_counts[status] = status_counts.get(status, 0) + 1
-        nr = _extract_order_nr(o)
-        c = o.get('customer', {}) or {}
-        city = c.get('city', '') if isinstance(c, dict) else ''
-        results.append({'nr': nr, 'status': status, 'city': city})
-    if not results: return f"Keine Aufträge für {emp_name} (ID: {emp_id_str}) gefunden.", None, None
-    total = len(results); capped = results[:50]
-    answer = f"Der Mitarbeiter {emp_name} hat {total} Aufträge ({', '.join([f'{cnt}x {st}' for st, cnt in status_counts.items()])})."
-    table = {'columns': ['Auftrags-Nr.', 'Status', 'Stadt'], 'rows': [[r['nr'], r['status'], r['city']] for r in capped]}
-    chart = {'type': 'pie', 'title': f'Status-Verteilung: {emp_name}', 'data': [{'name': st, 'value': cnt} for st, cnt in status_counts.items()]}
-    return answer, table, chart
+        results.append({'nr': _extract_order_nr(o), 'status': status, 'city': (o.get('customer',{}) or {}).get('city','')})
+    if not results: return f"Keine Aufträge für {emp_name} gefunden.", None, None
+    answer = f"Der Mitarbeiter {emp_name} hat {len(results)} Aufträge."
+    table = {'columns': ['Auftrags-Nr.', 'Status', 'Stadt'], 'rows': [[r['nr'], r['status'], r['city']] for r in results[:50]]}
+    return answer, table, None

@@ -16,16 +16,13 @@ def register_ai_analyst_routes(app):
     def _tool_query_vehicle_inventory(args: dict) -> str:
         from collections import Counter
         try:
+            # Fix: map_and_filter handles meter-to-cm conversion internally.
+            # We must NOT multiply by 100 here if args are already in meters.
             raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
             if not raw: return "Fehler: Fahrzeugdaten konnten nicht geladen werden."
             
-            # Korrektur für Längen-Parameter
-            filter_args = args.copy()
-            if 'laengeMin' in filter_args: filter_args['laengeMin'] = float(filter_args['laengeMin']) * 100
-            if 'laengeMax' in filter_args: filter_args['laengeMax'] = float(filter_args['laengeMax']) * 100
-
-            vehicles = map_and_filter(raw, filter_args)
-            make_q = str(filter_args.get('make') or '').strip().lower()
+            vehicles = map_and_filter(raw, args)
+            make_q = str(args.get('make') or '').strip().lower()
             if make_q: vehicles = [v for v in vehicles if make_q in v.get('hersteller', '').lower()]
             
             count = len(vehicles)
@@ -36,7 +33,7 @@ def register_ai_analyst_routes(app):
             
             res = {"treffer_anzahl": count, "preis_durchschnitt": int(avg_preis), "status": "Erfolg"}
             if 0 < count <= 15:
-                res["beispiele"] = [{"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "getriebe": v['getriebe']} for v in vehicles]
+                res["beispiele"] = [{"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "getriebe": v['getriebe'], "laenge": v['laenge_m']} for v in vehicles]
             else:
                 top_makes = Counter(v['hersteller'] for v in vehicles).most_common(5)
                 res["top_marken"] = dict(top_makes)
@@ -53,7 +50,7 @@ def register_ai_analyst_routes(app):
         cached = _qcache_get(question)
         if cached: return jsonify({**cached, "cached": True})
 
-        # Lokale Detektionen (DSGVO)
+        # Lokale Detektionen (DSGVO - Keine Daten an KI)
         is_cust, cp = _detect_customer_query(question)
         if is_cust:
             a, t = _execute_local_customer_query(cp)
@@ -78,12 +75,21 @@ def register_ai_analyst_routes(app):
 
         bi_context = _build_bi_context()
         
-        # Function Calling Definition & OpenAI Call
         import openai
         client = openai.OpenAI(api_key=api_key)
-        tools = [{"type": "function", "function": {"name": "query_inventory", "description": "Abfrage im Fahrzeugbestand.", "parameters": {"type": "object", "properties": {"art": {"type": "string"}, "getriebe": {"type": "string"}, "laengeMin": {"type": "number"}, "laengeMax": {"type": "number"}, "make": {"type": "string"}}}}}]
         
-        messages = [{"role": "system", "content": f"Du bist ein intelligenter Business-Analyst für ein Reisemobil-Handelsunternehmen. Statistik:\n{bi_context}"}, {"role": "user", "content": question}]
+        # Tools ermöglichen spezifische Detail-Abfragen
+        tools = [{"type": "function", "function": {"name": "query_inventory", "description": "Spezifische Abfrage im aktuellen Fahrzeugbestand.", "parameters": {"type": "object", "properties": {"art": {"type": "string", "description": "Kastenwagen, Teilintegriert, Alkoven, Integriert, Wohnwagen"}, "getriebe": {"type": "string", "enum": ["automatik", "schaltung"]}, "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 7.0)"}, "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.5)"}, "make": {"type": "string", "description": "Hersteller/Marke"}}}}}]
+        
+        messages = [
+            {"role": "system", "content": (
+                "Du bist ein intelligenter Business-Analyst für ein Reisemobil-Handelsunternehmen. "
+                "Nutze die nachfolgenden aggregierten Daten für allgemeine Fragen. "
+                "Für spezifische Detail-Abfragen im Live-Bestand nutze das Tool 'query_inventory'.\n\n"
+                f"{bi_context}"
+            )},
+            {"role": "user", "content": question}
+        ]
         
         try:
             comp = client.chat.completions.create(model="gpt-4o", messages=messages, tools=tools, tool_choice="auto")
