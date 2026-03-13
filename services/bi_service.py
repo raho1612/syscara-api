@@ -38,6 +38,9 @@ def map_and_filter(raw, filters, with_photos=False):
         features = v.get('features', [])
         if not isinstance(features, list): features = []
         
+        beds_list = beds_d.get('beds', []) if isinstance(beds_d.get('beds'), list) else []
+        bed_types = [str(bed.get('type', "")).upper() for bed in beds_list if isinstance(bed, dict)]
+        has_hubbett = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
         has_dusche = 'sep_dusche' in features or 'dusche' in features
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
         has_auto = any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"])
@@ -58,12 +61,14 @@ def map_and_filter(raw, filters, with_photos=False):
                 if filters.get('getriebe') == 'automatik' and not has_auto: continue
                 if filters.get('getriebe') == 'schaltung' and has_auto: continue
             if filters.get('schlafplaetzeMin') and schlafplaetze < int(filters.get('schlafplaetzeMin')): continue
+            if filters.get('hubbett') is True and not has_hubbett: continue
+            if filters.get('dusche') is True and not has_dusche: continue
 
         vehicles.append({
             "id": v.get('id'), "hersteller": model.get('producer', '-'), "modell": model.get('model', '-'),
             "preis": preis, "ek_preis": ek_preis, "preis_format": fmt_preis(preis), "ps": ps, "laenge_m": f"{laenge/100:.2f}",
             "modelljahr": modelljahr, "getriebe": "Automatik" if has_auto else "Schaltung", "zustand": condition,
-            "typ": art_label, "schlafplaetze": schlafplaetze
+            "typ": art_label, "schlafplaetze": schlafplaetze, "has_hubbett": has_hubbett, "has_dusche": has_dusche
         })
     return vehicles
 
@@ -112,6 +117,12 @@ def _build_bi_context() -> str:
             lines.append(f"  PS: " + ", ".join([f"{p}: {c}" for p, c in sorted(vs.get('ps_counts', {}).items(), key=lambda x: int(x[0].split()[0]))[:5]]))
             lines.append(f"  Längen: " + ", ".join([f"{k}: {v}" for k, v in vs.get('laenge_buckets', {}).items() if v > 0]))
             lines.append(f"  Getriebe: " + ", ".join([f"{k}: {v}" for k, v in vs.get('getriebe', {}).items()]))
+            
+            # Merkmale explizit hinzufügen
+            feats = []
+            if vs.get('hubbett', {}).get('Ja', 0): feats.append(f"Hubbett: {vs['hubbett']['Ja']}")
+            if vs.get('dusche', {}).get('Ja', 0): feats.append(f"Sep. Dusche: {vs['dusche']['Ja']}")
+            if feats: lines.append(f"  Ausstattung: " + ", ".join(feats))
     except: pass
         
     res = "\n".join(lines)

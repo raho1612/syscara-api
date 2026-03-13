@@ -73,7 +73,14 @@ def register_ai_analyst_routes(app):
             }
             if count <= 15:
                 res["beispiele"] = [
-                    {"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "laenge": v['laenge_m']} for v in vehicles
+                    {
+                        "marke": v['hersteller'], 
+                        "modell": v['modell'], 
+                        "preis": v['preis_format'], 
+                        "laenge": v['laenge_m'],
+                        "hubbett": "Ja" if v.get('has_hubbett') else "Nein",
+                        "dusche": "Ja" if v.get('has_dusche') else "Nein"
+                    } for v in vehicles
                 ]
             return json.dumps(res, ensure_ascii=False)
         except Exception as e:
@@ -120,13 +127,15 @@ def register_ai_analyst_routes(app):
             "type": "function", 
             "function": {
                 "name": "query_inventory", 
-                "description": "Werkzeug für Bestandsanalyse UND historische Verkaufszahlen (Aufträge).", 
+                "description": "Werkzeug für Bestandsanalyse (inkl. Hubbett, Dusche, Preis, EK) UND historische Verkaufszahlen (Aufträge).", 
                 "parameters": {
                     "type": "object", 
                     "properties": {
-                        "art": {"type": "string", "description": "Fahrzeugtyp (z.B. Kastenwagen)"}, 
+                        "art": {"type": "string", "description": "Fahrzeugtyp (z.B. Kastenwagen, Teilintegriert)"}, 
                         "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 5.40)"}, 
-                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 5.40)"},
+                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.50)"},
+                        "hubbett": {"type": "boolean", "description": "Filtere nach Fahrzeugen MIT Hubbett (Dropdown bed)"},
+                        "dusche": {"type": "boolean", "description": "Filtere nach Fahrzeugen MIT separater Dusche"},
                         "jahrMin": {"type": "integer", "description": "Jahr (für historische Verkäufe)"},
                         "isSalesQuery": {"type": "boolean", "description": "Setze auf true, wenn nach verkauften Fahrzeugen in der Vergangenheit gefragt wird."}
                     }
@@ -136,8 +145,8 @@ def register_ai_analyst_routes(app):
         
         messages = [
             {"role": "system", "content": (
-                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf den aktuellen Bestand UND das Auftragsarchiv.\n"
-                "Wenn der User fragt 'Wie viele haben wir verkauft?', nutze das Tool 'query_inventory' mit isSalesQuery=true.\n"
+                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf Ausstattung (Hubbett, Dusche), Preise (VK/EK) und Aufträge.\n"
+                "Wenn der User nach Hubbetten fragt, nutze das Tool 'query_inventory' mit hubbett=true.\n"
                 "5,40m Kastenwagen werden im System oft mit Länge 540 oder 541 cm geführt.\n\n"
                 f"{bi_context}"
             )},
