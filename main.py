@@ -670,32 +670,42 @@ def api_equipment():
 
 @app.route('/api/stats', methods=['GET'])
 def api_stats():
+    """Liefert die Fahrzeug-Statistiken für das Dashboard."""
     use_stale_fallback = str(request.args.get('allow_stale', '0')).lower() in ('1', 'true', 'yes')
 
     try:
+        # Versuch, Live-Daten zu laden
         raw = fetch_live_then_cache(
             'sale/vehicles',
             f"{SYSCARA_BASE}/sale/vehicles/",
             allow_stale_fallback=use_stale_fallback,
         )
-    except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": "Live-Fahrzeugdaten konnten nicht von Syscara geladen werden.",
-            "details": str(e),
-        }), 503
+        if not raw:
+            # Wenn gar nichts kommt, versuchen wir den Cache direkt
+            raw = load_from_supabase_chunked('sale/vehicles')
+            
+        if not raw:
+            return jsonify({"success": False, "error": "Keine Fahrzeugdaten verfügbar (Syscara & Cache leer)."}), 503
 
-    stats = build_vehicle_stats(
-        raw,
-        enable_offset=os.getenv("SYSCARA_KPI_OFFSET_ENABLE", "0") == "1",
-        offset_trigger=int(os.getenv("SYSCARA_KPI_OFFSET_TRIGGER", "483")),
-        offset_value=int(os.getenv("SYSCARA_KPI_OFFSET_VALUE", "2")),
-    )
-    response = jsonify({"success": True, "stats": stats})
-    response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-    response.headers['Pragma'] = 'no-cache'
-    response.headers['Expires'] = '0'
-    return response
+        stats = build_vehicle_stats(
+            raw,
+            enable_offset=os.getenv("SYSCARA_KPI_OFFSET_ENABLE", "0") == "1",
+            offset_trigger=int(os.getenv("SYSCARA_KPI_OFFSET_TRIGGER", "483")),
+            offset_value=int(os.getenv("SYSCARA_KPI_OFFSET_VALUE", "2")),
+        )
+        response = jsonify({"success": True, "stats": stats})
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        # CORS und Cache-Header sicherstellen
+        return response
+
+    except Exception as e:
+        print(f"[CRITICAL] Fehler in /api/stats: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        return jsonify({
+            "success": False, 
+            "error": "Interner Fehler bei der Statistik-Berechnung.",
+            "details": str(e)
+        }), 500
 
 
 @app.route('/api/performance', methods=['GET'])
@@ -716,19 +726,8 @@ def api_performance():
         # sometimes iter_items returns a single-item list containing the real list
         if len(items) == 1 and isinstance(items[0], list):
             items = items[0]
-    try:
-        print(f"[DEBUG] /api/performance -> raw type: {type(raw)}, items: {len(items)}", flush=True)
-        if items:
-            print(f"[DEBUG] sample order: {str(items[0])[:200]}", flush=True)
-    except Exception:
-        pass
-    print(f"[DEBUG] /api/performance: fetched {len(items)} order items", flush=True)
-    if len(items) > 0:
-        try:
-            sample = items[0]
-            print(f"[DEBUG] sample order keys: {list(sample.keys())}", flush=True)
-        except Exception as e:
-            print(f"[DEBUG] could not print sample order: {e}", flush=True)
+    
+    print(f"[DEBUG] /api/performance: fetched {len(items)} order items for year {year}", flush=True)
 
     # Hilfsstruktur: name -> months(1..12) -> metrics
     employees: dict = {}
@@ -740,23 +739,17 @@ def api_performance():
         if isinstance(d, str):
             candidates.append(d)
         elif isinstance(d, dict):
-            # common nested keys
             for k in ('create', 'created', 'create_date', 'created_at', 'createAt', 'update', 'updated_at'):
                 v = d.get(k)
-                if v:
-                    candidates.append(v)
-            # also try the first string value
+                if v: candidates.append(v)
             for v in d.values():
-                if isinstance(v, str):
-                    candidates.append(v)
+                if isinstance(v, str): candidates.append(v)
         for k in ('created_at', 'created', 'create', 'date', 'createdAt'):
             v = o_item.get(k)
-            if isinstance(v, str):
-                candidates.append(v)
+            if isinstance(v, str): candidates.append(v)
 
         for s in candidates:
-            if not s or not isinstance(s, str):
-                continue
+            if not s or not isinstance(s, str): continue
             try:
                 return datetime.fromisoformat(s.replace('Z', '+00:00'))
             except Exception:
@@ -766,93 +759,81 @@ def api_performance():
                     continue
         return None
 
-    # Klarname-Mapping einmalig laden
+    # Klarname-Mapping laden (Mapping aus employee_names.json hat Vorrang)
     _emp_names = _load_employee_names()
 
     def extract_employee_name(o_item):
-        """Gibt den Klarnamen des Mitarbeiters zurück. Löst IDs via employee_names.json auf."""
-        candidates = []
-        u = o_item.get('user')
-        if isinstance(u, dict):
-            order_uid = u.get('order')
-            if order_uid and isinstance(order_uid, (str, int)) and int(order_uid) > 0:
-                candidates.append(str(order_uid))
-            update_uid = u.get('update')
-            if update_uid and isinstance(update_uid, (str, int)) and int(update_uid) > 0:
-                candidates.append(str(update_uid))
-            for k in ('name', 'username', 'full_name', 'display_name', 'id'):
-                v = u.get(k)
-                if v and isinstance(v, (str, int)) and str(v).strip():
-                    candidates.append(str(v))
-        elif isinstance(u, (str, int)) and str(u).strip():
-            candidates.append(str(u))
+        """Gibt den Klarnamen des Mitarbeiters zurück. Löst IDs via employee_names.json auf.
+        Falls kein Mapping existiert, werden Namen direkt aus dem User-Objekt bevorzugt.
+        """
+        u = o_item.get('user') or {}
+        ids = []
+        names = []
 
-        for key in ('responsible', 'seller', 'sales_person', 'zustaendig', 'assignee', 'owner'):
+        # 1. IDs sammeln (für Mapping)
+        for key in ('order', 'update', 'id'):
+            v = u.get(key)
+            if v and str(v).isdigit(): ids.append(str(v))
+
+        # 2. Namen sammeln (als Fallback)
+        for key in ('full_name', 'name', 'display_name', 'username'):
+            v = u.get(key)
+            if v and isinstance(v, str) and v.strip() and not v.strip().isdigit():
+                names.append(v.strip())
+
+        # 3. Zusätzliche Syscara-Felder prüfen
+        for key in ('responsible', 'seller', 'sales_person'):
             v = o_item.get(key)
-            if isinstance(v, str) and v:
-                candidates.append(v)
-            if isinstance(v, dict):
-                for k in ('name', 'username', 'id'):
-                    vv = v.get(k)
-                    if vv:
-                        candidates.append(str(vv))
+            if isinstance(v, str) and v.strip() and not v.strip().isdigit():
+                names.append(v.strip())
+            elif isinstance(v, dict):
+                vv = v.get('name') or v.get('username')
+                if vv: names.append(str(vv))
 
-        cust = o_item.get('customer')
-        if isinstance(cust, dict):
-            for k in ('responsible', 'owner', 'agent'):
-                vv = cust.get(k)
-                if vv:
-                    candidates.append(str(vv))
-
-        for c in candidates:
-            if c and isinstance(c, str) and c.strip():
-                uid = c.strip()
-                # Klarname aus Mapping, Fallback auf ID
-                return _emp_names.get(uid, uid)
+        # --- Auflösung ---
+        for uid in ids:
+            if uid in _emp_names: return _emp_names[uid]
+        if names: return names[0]
+        if ids: return f"ID {ids[0]}"
         return 'Unbekannt'
 
     for o in items:
-        if not o or not isinstance(o, dict):
-            continue
-
+        if not o or not isinstance(o, dict): continue
         dt = extract_date(o)
-        if not dt or dt.year != year:
-            continue
+        if not dt or dt.year != year: continue
 
         month = dt.month
         quarter = (month - 1) // 3 + 1
-
         name = extract_employee_name(o)
 
-        # Initialisiere Employee-Eintrag
         if name not in employees:
-            months = {str(i): {k: {"count": 0, "revenue": 0, "cumulative_count": 0} for k in ['OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION']} for i in range(1, 13)}
-            quarters = {f'Q{i}': {k: {"count": 0, "revenue": 0, "cumulative_count": 0} for k in ['OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION']} for i in range(1, 5)}
-            employees[name] = {"id": name.replace(' ', '_'), "name": name, "months": months, "quarters": quarters}
+            m_template = {str(i): {k: {"count": 0, "revenue": 0, "cumulative_count": 0} for k in ['OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION']} for i in range(1, 13)}
+            q_template = {f'Q{i}': {k: {"count": 0, "revenue": 0, "cumulative_count": 0} for k in ['OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION']} for i in range(1, 5)}
+            employees[name] = {"id": name.replace(' ', '_'), "name": name, "months": m_template, "quarters": q_template}
 
-        # Bestellwert
-        price = o.get('price') or o.get('total') or o.get('amount') or 0
+        price = 0
         try:
-            price = float(price or 0)
-        except Exception:
-            price = 0
+            p_val = o.get('price') or o.get('total') or o.get('amount') or 0
+            price = float(p_val)
+        except: pass
 
-        # Bestimme Metrik aus Status-Feld (Werte: OFFER, ORDER, CONTRACT, CANCELLATION)
-        status = o.get('status')
-        if isinstance(status, dict):
-            status = (status.get('key') or status.get('label') or '')
-        status = str(status or '').upper().strip()
-        # Status direkt als Metrik verwenden, Fallback auf ORDER
+        st_obj = o.get('status')
+        status = ''
+        if isinstance(st_obj, dict):
+            status = str(st_obj.get('key') or st_obj.get('label') or '').upper()
+        else:
+            status = str(st_obj or '').upper()
+        
         VALID_METRICS = {'OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION'}
-        m = status if status in VALID_METRICS else 'ORDER'
+        m_type = status if status in VALID_METRICS else 'ORDER'
 
         emp = employees[name]
-        emp['months'][str(month)][m]['count'] += 1
-        emp['months'][str(month)][m]['revenue'] += price
-        emp['quarters'][f'Q{quarter}'][m]['count'] += 1
-        emp['quarters'][f'Q{quarter}'][m]['revenue'] += price
+        emp['months'][str(month)][m_type]['count'] += 1
+        emp['months'][str(month)][m_type]['revenue'] += price
+        emp['quarters'][f'Q{quarter}'][m_type]['count'] += 1
+        emp['quarters'][f'Q{quarter}'][m_type]['revenue'] += price
 
-    # Cumulative counts per employee (per month)
+    # Cumulative counts
     for name, emp in employees.items():
         running = {k: 0 for k in ['OFFER', 'ORDER', 'CONTRACT', 'CANCELLATION']}
         for i in range(1, 13):
@@ -1357,14 +1338,31 @@ def _execute_local_customer_query(params: dict) -> tuple:
 # ─── Mitarbeiter-Abfragen ─────────────────────────────────────────────────────
 
 def _load_employee_names() -> dict:
-    """Lädt employee_names.json wenn vorhanden. Gibt {id_str: name} zurück."""
-    for emp_file in _candidate_file_paths("employee_names.json", "EMPLOYEE_NAMES_PATH"):
+    """Lädt employee_names.json aus verschiedenen Quellen. Sicherer Fallback für Docker."""
+    # 1. ENV-Variable hat höchste Priorität
+    env_path = os.getenv("EMPLOYEE_NAMES_PATH")
+    if env_path and os.path.exists(env_path):
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: pass
+
+    # 2. Direkt im Verzeichnis der main.py (wichtig für Docker CMD)
+    local_path = Path(__file__).resolve().parent / "employee_names.json"
+    if local_path.exists():
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: pass
+
+    # 3. Klassische Kandidaten-Suche
+    for emp_file in _candidate_file_paths("employee_names.json"):
         if emp_file.exists():
             try:
                 with open(emp_file, "r", encoding="utf-8") as f:
-                    return __import__("json").load(f)
-            except Exception:
-                pass
+                    return json.load(f)
+            except: pass
+
     return {}
 
 
