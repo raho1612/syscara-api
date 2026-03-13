@@ -16,12 +16,13 @@ def register_ai_analyst_routes(app):
     def _tool_query_vehicle_inventory(args: dict) -> str:
         from collections import Counter
         try:
-            # Fix: map_and_filter handles meter-to-cm conversion internally.
-            # We must NOT multiply by 100 here if args are already in meters.
             raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
             if not raw: return "Fehler: Fahrzeugdaten konnten nicht geladen werden."
             
+            # map_and_filter handles all numeric conversions internally
             vehicles = map_and_filter(raw, args)
+            
+            # Additional text filtering for brand/make if not in map_and_filter (though it should be)
             make_q = str(args.get('make') or '').strip().lower()
             if make_q: vehicles = [v for v in vehicles if make_q in v.get('hersteller', '').lower()]
             
@@ -31,12 +32,31 @@ def register_ai_analyst_routes(app):
             prices = [v['preis'] for v in vehicles if v['preis'] > 0]
             avg_preis = sum(prices) / len(prices) if prices else 0
             
-            res = {"treffer_anzahl": count, "preis_durchschnitt": int(avg_preis), "status": "Erfolg"}
-            if 0 < count <= 15:
-                res["beispiele"] = [{"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "getriebe": v['getriebe'], "laenge": v['laenge_m']} for v in vehicles]
+            res = {
+                "treffer_anzahl": count, 
+                "preis_durchschnitt": int(avg_preis),
+                "preis_min": int(min(prices)) if prices else 0,
+                "preis_max": int(max(prices)) if prices else 0,
+                "status": "Erfolg"
+            }
+            
+            if 0 < count <= 20:
+                res["beispiele"] = [
+                    {
+                        "marke": v['hersteller'], 
+                        "modell": v['modell'], 
+                        "preis": v['preis_format'], 
+                        "ps": v['ps'],
+                        "jahr": v['modelljahr'],
+                        "laenge": v['laenge_m']
+                    } for v in vehicles
+                ]
             else:
-                top_makes = Counter(v['hersteller'] for v in vehicles).most_common(5)
-                res["top_marken"] = dict(top_makes)
+                res["zusammenfassung"] = {
+                    "top_marken": dict(Counter(v['hersteller'] for v in vehicles).most_common(5)),
+                    "top_ps": dict(Counter(v['ps'] for v in vehicles).most_common(3)),
+                    "top_modelljahr": dict(Counter(v['modelljahr'] for v in vehicles).most_common(3))
+                }
             return json.dumps(res, ensure_ascii=False)
         except Exception as e:
             return f"Technischer Fehler im Tool: {str(e)}"
@@ -50,7 +70,7 @@ def register_ai_analyst_routes(app):
         cached = _qcache_get(question)
         if cached: return jsonify({**cached, "cached": True})
 
-        # Lokale Detektionen (DSGVO - Keine Daten an KI)
+        # DSGVO-Bereich (lokale Detektion)
         is_cust, cp = _detect_customer_query(question)
         if is_cust:
             a, t = _execute_local_customer_query(cp)
@@ -78,14 +98,39 @@ def register_ai_analyst_routes(app):
         import openai
         client = openai.OpenAI(api_key=api_key)
         
-        # Tools ermöglichen spezifische Detail-Abfragen
-        tools = [{"type": "function", "function": {"name": "query_inventory", "description": "Spezifische Abfrage im aktuellen Fahrzeugbestand.", "parameters": {"type": "object", "properties": {"art": {"type": "string", "description": "Kastenwagen, Teilintegriert, Alkoven, Integriert, Wohnwagen"}, "getriebe": {"type": "string", "enum": ["automatik", "schaltung"]}, "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 7.0)"}, "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.5)"}, "make": {"type": "string", "description": "Hersteller/Marke"}}}}}]
+        # Umfassendes Tool für ALLE Syscara-Filter (Omniscient Tool)
+        tools = [{
+            "type": "function", 
+            "function": {
+                "name": "query_inventory", 
+                "description": "Führt komplexe Suchen und statistische Abfragen im gesamten Fahrzeugbestand durch.", 
+                "parameters": {
+                    "type": "object", 
+                    "properties": {
+                        "art": {"type": "string", "description": "Typ (Kastenwagen, Teilintegriert, Alkoven, Integriert, Wohnwagen)"}, 
+                        "zustand": {"type": "string", "enum": ["NEW", "USED"]},
+                        "psMin": {"type": "integer", "description": "Minimale PS"}, 
+                        "psMax": {"type": "integer", "description": "Maximale PS"},
+                        "preisMin": {"type": "integer", "description": "Mindestpreis in €"}, 
+                        "preisMax": {"type": "integer", "description": "Maximalpreis in €"},
+                        "jahrMin": {"type": "integer", "description": "Frühestes Modelljahr"}, 
+                        "jahrMax": {"type": "integer", "description": "Spätestes Modelljahr"},
+                        "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 6.36)"}, 
+                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.50)"},
+                        "make": {"type": "string", "description": "Bestimmter Hersteller/Marke"},
+                        "getriebe": {"type": "string", "enum": ["automatik", "schaltung"]},
+                        "schlafplaetzeMin": {"type": "integer", "description": "Minimale Schlafplätze"}
+                    }
+                }
+            }
+        }]
         
         messages = [
             {"role": "system", "content": (
-                "Du bist ein intelligenter Business-Analyst für ein Reisemobil-Handelsunternehmen. "
-                "Nutze die nachfolgenden aggregierten Daten für allgemeine Fragen. "
-                "Für spezifische Detail-Abfragen im Live-Bestand nutze das Tool 'query_inventory'.\n\n"
+                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf alle Unternehmensdaten.\n"
+                "NUTZE DEN UNTENSTEHENDEN KONTEXT FÜR SCHNELLE ÜBERBLICKE.\n"
+                "NUTZE DAS TOOL 'query_inventory' FÜR JEDE SPEZIFISCHE FILTERUNG (z.B. nach PS, Preis, Jahr oder Kombinationen).\n"
+                "Wenn der User nach Durchschnittspreisen für bestimmte Kriterien fragt, nutze das Tool.\n\n"
                 f"{bi_context}"
             )},
             {"role": "user", "content": question}
