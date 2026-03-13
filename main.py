@@ -22,6 +22,22 @@ register_sync_routes(app)
 def health():
     return jsonify({"status": "ok", "version": "2.0.0-modular"})
 
+@app.route('/api/diag')
+def api_diag():
+    from api.performance import _load_employee_names
+    emp_names = _load_employee_names()
+    return jsonify({
+        "success": True,
+        "modular": True,
+        "employee_names_exists": len(emp_names) > 0,
+        "employee_names_count": len(emp_names),
+        "has_openai_key": bool(os.getenv("OPENAI_API_KEY")),
+        "has_anthropic_key": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "supabase_connected": supabase is not None,
+        "root_dir": str(ROOT_DIR),
+        "current_dir": str(CURRENT_DIR)
+    })
+
 @app.route('/')
 def index():
     return jsonify({
