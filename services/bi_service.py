@@ -113,7 +113,14 @@ def map_and_filter(raw, filters, with_photos=False):
         vehicles.append(obj)
     return vehicles
 
+_BI_CONTEXT_CACHE = {'ts': 0, 'data': None}
+_BI_CONTEXT_TTL = 300 # 5 Minuten Cache
+
 def _build_bi_context() -> str:
+    global _BI_CONTEXT_CACHE
+    if _BI_CONTEXT_CACHE['data'] and (time.time() - _BI_CONTEXT_CACHE['ts'] < _BI_CONTEXT_TTL):
+        return _BI_CONTEXT_CACHE['data']
+
     lines = [f"=== UNTERNEHMENSDATEN (Stand: {_dt.date.today().strftime('%d.%m.%Y')}) ==="]
     try:
         items = _get_orders()
@@ -185,7 +192,9 @@ def _build_bi_context() -> str:
     except Exception as e:
         lines.append(f"\n(Statistik-Fehler: {str(e)})")
         
-    return "\n".join(lines)
+    res = "\n".join(lines)
+    _BI_CONTEXT_CACHE = {'ts': time.time(), 'data': res}
+    return res
 
 def _detect_customer_query(question: str):
     q = question.lower()
