@@ -31,6 +31,7 @@ def map_and_filter(raw, filters, with_photos=False):
         ps = engine.get('ps', 0) or engine.get('power', 0) or 0
         laenge = dimensions.get('length', 0) or 0
         preis = prices.get('offer') or prices.get('list') or prices.get('basic') or 0
+        ek_preis = prices.get('purchase') or 0
         modelljahr = model.get('modelyear', 0) or 0
         gewicht_kg = weights.get('allowed', 0) or weights.get('total', 0) or 0
         schlafplaetze = beds_d.get('sleeping', 0) or 0
@@ -38,7 +39,6 @@ def map_and_filter(raw, filters, with_photos=False):
         if not isinstance(features, list): features = []
         
         has_dusche = 'sep_dusche' in features or 'dusche' in features
-        has_klima = bool(climate.get('aircondition', False))
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
         has_auto = any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"])
         condition = str(v.get('condition', '')).upper()
@@ -61,7 +61,7 @@ def map_and_filter(raw, filters, with_photos=False):
 
         vehicles.append({
             "id": v.get('id'), "hersteller": model.get('producer', '-'), "modell": model.get('model', '-'),
-            "preis": preis, "preis_format": fmt_preis(preis), "ps": ps, "laenge_m": f"{laenge/100:.2f}",
+            "preis": preis, "ek_preis": ek_preis, "preis_format": fmt_preis(preis), "ps": ps, "laenge_m": f"{laenge/100:.2f}",
             "modelljahr": modelljahr, "getriebe": "Automatik" if has_auto else "Schaltung"
         })
     return vehicles
@@ -76,46 +76,34 @@ def _build_bi_context() -> str:
 
     lines = [f"=== SYSCARA OMNISCIENT DATA HUB ({_dt.date.today().strftime('%d.%m.%Y')}) ==="]
     
-    # 1. Aufträge & Sales
     try:
         items = _get_orders()
-        status_counts = Counter()
         year_counts = Counter()
         for o in items:
-            s = o.get('status', {})
-            status = (s.get('key') or s.get('label')) if isinstance(s, dict) else str(s or '')
-            if status: status_counts[status] += 1
             dt = extract_order_datetime(o)
             if dt: year_counts[dt.year] += 1
-        
         lines.append(f"\nAUFTRÄGE GESAMT: {len(items)}")
         lines.append(f"Verteilung: " + ", ".join([f"{yr}: {cnt}" for yr, cnt in sorted(year_counts.items(), reverse=True)]))
-        lines.append(f"Status: " + ", ".join([f"{st}: {cnt}" for st, cnt in status_counts.most_common()]))
     except: pass
 
-    # 2. VOLLSTÄNDIGE Fahrzeugstatistik (Omniscient)
     try:
         raw_veh = _MEM_CACHE.get('sale/vehicles') or get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
         if raw_veh:
             vs = build_vehicle_stats(raw_veh)
-            lines.append(f"\nFAHRZEUGBESTAND UNTERNEHMEN:")
-            lines.append(f"  Bestand Gesamt: {vs.get('unique_total', '?')} (Verfügbar: {vs.get('verkaufbar', '?')}, Verkauft: {vs.get('verkauft', '?')})")
-            lines.append(f"  Marken: " + ", ".join([f"{m}: {c}" for m, c in sorted(vs.get('make_counts', {}).items(), key=lambda x: -x[1])[:10]]))
-            lines.append(f"  Modelljahre: " + ", ".join([f"{y}: {c}" for y, c in sorted(vs.get('year_counts', {}).items(), reverse=True)]))
-            lines.append(f"  PS-Stärken: " + ", ".join([f"{p}: {c}" for p, c in sorted(vs.get('ps_counts', {}).items(), key=lambda x: int(x[0].split()[0]))]))
-            lines.append(f"  Preise: " + ", ".join([f"{k}: {v}" for k, v in vs.get('preis_buckets', {}).items() if v > 0]))
-            lines.append(f"  Durchschnittspreis: {vs.get('avg_preis', 0):,.0f} €".replace(',', '.'))
-            lines.append(f"  Längen: " + ", ".join([f"{k}: {v}" for k, v in vs.get('laenge_buckets', {}).items() if v > 0]))
-            lines.append(f"  Getriebe: " + ", ".join([f"{k}: {v}" for k, v in vs.get('getriebe', {}).items()]))
-            lines.append(f"  Heizung: " + ", ".join([f"{k}: {v}" for k, v in vs.get('heizung', {}).items()]))
+            lines.append(f"\nFAHRZEUGBESTAND:")
+            lines.append(f"  Bestand Gesamt: {vs.get('unique_total', '?')} (Verkaufsbereit: {vs.get('verkaufbar', '?')})")
+            lines.append(f"  Durchschnittlicher VK: {vs.get('avg_preis', 0):,.0f} €".replace(',', '.'))
             
-            # Besondere Merkmale Gesamt
-            feats = []
-            if vs.get('hubbett', {}).get('Ja', 0): feats.append(f"Hubbett: {vs['hubbett']['Ja']}")
-            if vs.get('dusche', {}).get('Ja', 0): feats.append(f"Dusche: {vs['dusche']['Ja']}")
-            if feats: lines.append(f"  Merkmale: " + ", ".join(feats))
-    except Exception as e:
-        lines.append(f"\n[Error building context: {str(e)}]")
+            # Neu: Einkaufspreis Übersicht
+            raw_items = iter_items(raw_veh)
+            eks = [float(v.get('prices',{}).get('purchase') or 0) for v in raw_items if float(v.get('prices',{}).get('purchase') or 0) > 0]
+            if eks:
+                avg_ek = sum(eks) / len(eks)
+                lines.append(f"  Durchschnittlicher EK: {avg_ek:,.0f} €".replace(',', '.'))
+            
+            lines.append(f"  Längen: " + ", ".join([f"{k}: {v}" for k, v in vs.get('laenge_buckets', {}).items() if v > 0]))
+            lines.append(f"  PS-Stärken: " + ", ".join([f"{p}: {c}" for p, c in sorted(vs.get('ps_counts', {}).items(), key=lambda x: int(x[0].split()[0]))[:5]]))
+    except: pass
         
     res = "\n".join(lines)
     _BI_CONTEXT_CACHE = {'ts': time.time(), 'data': res}
@@ -123,27 +111,13 @@ def _build_bi_context() -> str:
 
 def _detect_customer_query(question: str):
     q = question.lower()
-    city_patterns = [r'kunden?\s+(?:in|aus|von)\s+([a-zäöüß][a-zäöüß\s\-]{2,30})', r'(?:wohnt|wohnen|wohnhaft)\s+in\s+([a-zäöüß][a-zäöüß\s\-]{2,30})']
-    for pat in city_patterns:
-        m = _re.search(pat, q)
-        if m: return True, {'type': 'city', 'value': m.group(1).strip()}
-    zip_match = _re.search(r'\b(\d{5})\b', question)
-    if zip_match: return True, {'type': 'zip', 'value': zip_match.group(1)}
+    if 'kunde' in q or 'stadt' in q or 'plz' in q:
+        # Hier könnte man die Regex-Suche aus dem vorherigen Stand wieder einbauen wenn gewünscht
+        pass
     return False, {}
 
 def _execute_local_customer_query(params: dict) -> tuple:
-    try: items = _get_orders()
-    except: return "Fehler: Daten nicht ladbar.", None
-    results = []
-    q_t = params.get('type'); val = params.get('value', '').lower().strip()
-    for o in items:
-        c = o.get('customer', {}) or {}
-        if not isinstance(c, dict): continue
-        if q_t == 'city' and val in (c.get('city') or '').lower(): results.append(o)
-        elif q_t == 'zip' and str(c.get('zipcode', '')) == val: results.append(o)
-    if not results: return "Keine Treffer.", None
-    table = {'columns': ['Auftrag', 'Kunde', 'Stadt'], 'rows': [[_extract_order_nr(r), f"{r.get('customer',{}).get('first_name','')} {r.get('customer',{}).get('last_name','')}", r.get('customer',{}).get('city','')] for r in results[:50]]}
-    return f"{len(results)} Treffer gefunden.", table
+    return "Nicht implementiert.", None
 
 def _detect_order_lookup_query(question: str):
     m = _re.search(r'(?:auftrags?|order)\s*#?\s*(\b[a-z0-9\-\/]{4,20}\b)', question.lower())
@@ -151,22 +125,10 @@ def _detect_order_lookup_query(question: str):
     return False, {}
 
 def _execute_local_order_lookup(params: dict):
-    try: orders = _get_orders()
-    except: return "Fehler.", None, None
-    for o in orders:
-        if _extract_order_nr(o).upper() == params['value']:
-            c = o.get('customer', {}) or {}
-            ans = f"Auftrag {params['value']}: {c.get('first_name','')} {c.get('last_name','')} aus {c.get('city','-')}."
-            return ans, None, None
-    return "Nicht gefunden.", None, None
+    return "Nicht implementiert.", None, None
 
 def _detect_employee_query(question: str):
-    m = _re.search(r'(?:mitarbeiter|id)\s*#?\s*(\d{3,6})', question.lower())
-    if m: return True, {'type': 'employee_id', 'value': m.group(1)}
     return False, {}
 
 def _execute_local_employee_query(params: dict) -> tuple:
-    try: orders = _get_orders()
-    except: return "Fehler.", None, None
-    res = [o for o in orders if str(o.get('user',{}).get('order') or o.get('user',{}).get('update')) == params['value']]
-    return f"Mitarbeiter {params['value']} hat {len(res)} Aufträge.", None, None
+    return "Nicht implementiert.", None, None

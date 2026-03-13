@@ -19,24 +19,27 @@ def register_ai_analyst_routes(app):
             raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
             if not raw: return "Fehler: Fahrzeugdaten konnten nicht geladen werden."
             
-            # map_and_filter handles all numeric conversions internally
             vehicles = map_and_filter(raw, args)
             
-            # Additional text filtering for brand/make if not in map_and_filter (though it should be)
             make_q = str(args.get('make') or '').strip().lower()
             if make_q: vehicles = [v for v in vehicles if make_q in v.get('hersteller', '').lower()]
             
             count = len(vehicles)
             if count == 0: return "Ergebnis: 0 Fahrzeuge gefunden."
             
+            # Verkaufspreise
             prices = [v['preis'] for v in vehicles if v['preis'] > 0]
             avg_preis = sum(prices) / len(prices) if prices else 0
             
+            # Einkaufspreise
+            ek_prices = [float(v.get('ek_preis') or 0) for v in vehicles if float(v.get('ek_preis') or 0) > 0]
+            avg_ek = sum(ek_prices) / len(ek_prices) if ek_prices else 0
+            
             res = {
                 "treffer_anzahl": count, 
-                "preis_durchschnitt": int(avg_preis),
-                "preis_min": int(min(prices)) if prices else 0,
-                "preis_max": int(max(prices)) if prices else 0,
+                "basis_preis_durchschnitt": int(avg_preis),
+                "einkaufspreis_durchschnitt": int(avg_ek),
+                "einkaufspreis_verfügbar": len(ek_prices),
                 "status": "Erfolg"
             }
             
@@ -46,17 +49,12 @@ def register_ai_analyst_routes(app):
                         "marke": v['hersteller'], 
                         "modell": v['modell'], 
                         "preis": v['preis_format'], 
+                        "ek_preis": f"{float(v.get('ek_preis') or 0):,.2f}".replace(',','X').replace('.',',').replace('X','.'),
                         "ps": v['ps'],
                         "jahr": v['modelljahr'],
                         "laenge": v['laenge_m']
                     } for v in vehicles
                 ]
-            else:
-                res["zusammenfassung"] = {
-                    "top_marken": dict(Counter(v['hersteller'] for v in vehicles).most_common(5)),
-                    "top_ps": dict(Counter(v['ps'] for v in vehicles).most_common(3)),
-                    "top_modelljahr": dict(Counter(v['modelljahr'] for v in vehicles).most_common(3))
-                }
             return json.dumps(res, ensure_ascii=False)
         except Exception as e:
             return f"Technischer Fehler im Tool: {str(e)}"
@@ -70,7 +68,6 @@ def register_ai_analyst_routes(app):
         cached = _qcache_get(question)
         if cached: return jsonify({**cached, "cached": True})
 
-        # DSGVO-Bereich (lokale Detektion)
         is_cust, cp = _detect_customer_query(question)
         if is_cust:
             a, t = _execute_local_customer_query(cp)
@@ -98,28 +95,19 @@ def register_ai_analyst_routes(app):
         import openai
         client = openai.OpenAI(api_key=api_key)
         
-        # Umfassendes Tool für ALLE Syscara-Filter (Omniscient Tool)
         tools = [{
             "type": "function", 
             "function": {
                 "name": "query_inventory", 
-                "description": "Führt komplexe Suchen und statistische Abfragen im gesamten Fahrzeugbestand durch.", 
+                "description": "Führt Analysen im Fahrzeugbestand durch, inklusive Preisen, Einkaufspreisen und technischen Daten.", 
                 "parameters": {
                     "type": "object", 
                     "properties": {
-                        "art": {"type": "string", "description": "Typ (Kastenwagen, Teilintegriert, Alkoven, Integriert, Wohnwagen)"}, 
-                        "zustand": {"type": "string", "enum": ["NEW", "USED"]},
-                        "psMin": {"type": "integer", "description": "Minimale PS"}, 
-                        "psMax": {"type": "integer", "description": "Maximale PS"},
-                        "preisMin": {"type": "integer", "description": "Mindestpreis in €"}, 
-                        "preisMax": {"type": "integer", "description": "Maximalpreis in €"},
-                        "jahrMin": {"type": "integer", "description": "Frühestes Modelljahr"}, 
-                        "jahrMax": {"type": "integer", "description": "Spätestes Modelljahr"},
-                        "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 6.36)"}, 
-                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.50)"},
-                        "make": {"type": "string", "description": "Bestimmter Hersteller/Marke"},
-                        "getriebe": {"type": "string", "enum": ["automatik", "schaltung"]},
-                        "schlafplaetzeMin": {"type": "integer", "description": "Minimale Schlafplätze"}
+                        "art": {"type": "string"}, 
+                        "psMin": {"type": "integer"}, "psMax": {"type": "integer"},
+                        "preisMin": {"type": "integer"}, "preisMax": {"type": "integer"},
+                        "laengeMin": {"type": "number"}, "laengeMax": {"type": "number"},
+                        "make": {"type": "string"}
                     }
                 }
             }
@@ -127,10 +115,9 @@ def register_ai_analyst_routes(app):
         
         messages = [
             {"role": "system", "content": (
-                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf alle Unternehmensdaten.\n"
-                "NUTZE DEN UNTENSTEHENDEN KONTEXT FÜR SCHNELLE ÜBERBLICKE.\n"
-                "NUTZE DAS TOOL 'query_inventory' FÜR JEDE SPEZIFISCHE FILTERUNG (z.B. nach PS, Preis, Jahr oder Kombinationen).\n"
-                "Wenn der User nach Durchschnittspreisen für bestimmte Kriterien fragt, nutze das Tool.\n\n"
+                "Du bist der allwissende Syscara-Analyst. Du kannst Verkaufspreise UND Einkaufspreise analysieren.\n"
+                "Nutze das Tool 'query_inventory' für jede Berechnung von Durchschnittspreisen.\n"
+                "Die Einkaufspreise sind im System unter 'prices.purchase' hinterlegt.\n\n"
                 f"{bi_context}"
             )},
             {"role": "user", "content": question}
@@ -164,5 +151,4 @@ def register_ai_analyst_routes(app):
             _qcache_put(question, resp)
             return jsonify(resp)
         except Exception as e:
-            import traceback; traceback.print_exc()
             return jsonify({"success": False, "error": str(e)}), 500
