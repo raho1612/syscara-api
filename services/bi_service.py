@@ -179,10 +179,23 @@ def _build_bi_context() -> str:
             pb_list = [f"{k}: {v}" for k, v in pb.items() if v > 0]
             if pb_list: lines.append("  Preisklassen: " + ", ".join(pb_list))
             
-            # Längenklassen (Wichtig für die Benutzerfrage!)
+            # Längenklassen
             lb = vs.get('laenge_buckets', {})
             lb_list = [f"{k}: {v}" for k, v in lb.items() if v > 0]
             if lb_list: lines.append("  Längenklassen: " + ", ".join(lb_list))
+            
+            # Getriebe & Heizung
+            gb = vs.get('getriebe', {})
+            lines.append("  Getriebe: " + ", ".join([f"{k}: {v}" for k, v in gb.items()]))
+            hz = vs.get('heizung', {})
+            lines.append("  Heizung: " + ", ".join([f"{k}: {v}" for k, v in hz.items()]))
+            
+            # Ausstattungsmerkmale
+            feat_parts = []
+            if vs.get('hubbett', {}).get('Ja', 0) > 0: feat_parts.append(f"Hubbett: {vs['hubbett']['Ja']}")
+            if vs.get('dusche', {}).get('Ja', 0) > 0: feat_parts.append(f"Sep. Dusche: {vs['dusche']['Ja']}")
+            if vs.get('klima', {}).get('Ja', 0) > 0: feat_parts.append(f"Klima: {vs['klima']['Ja']}")
+            if feat_parts: lines.append("  Features: " + ", ".join(feat_parts))
             
             # Top Marken
             raw_items = iter_items(raw_veh)
