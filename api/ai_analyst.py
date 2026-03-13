@@ -107,7 +107,10 @@ def register_ai_analyst_routes(app):
                         "psMin": {"type": "integer"}, "psMax": {"type": "integer"},
                         "preisMin": {"type": "integer"}, "preisMax": {"type": "integer"},
                         "laengeMin": {"type": "number"}, "laengeMax": {"type": "number"},
-                        "make": {"type": "string"}
+                        "make": {"type": "string"},
+                        "zustand": {"type": "string", "enum": ["NEW", "USED"]},
+                        "jahrMin": {"type": "integer"}, "jahrMax": {"type": "integer"},
+                        "schlafplaetzeMin": {"type": "integer"}
                     }
                 }
             }
