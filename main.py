@@ -87,6 +87,7 @@ for env_path in (CURRENT_DIR / ".env", CURRENT_DIR.parent / ".env", WORKSPACE_RO
 
 SHARED_IMPORT_ROOTS = [
     CURRENT_DIR,
+    CURRENT_DIR.parent,
     CURRENT_DIR.parent / "syscara-dashboard",
 ]
 
@@ -253,7 +254,7 @@ def save_to_supabase_chunked(endpoint_name, data):
     try:
         supabase.table("api_cache").upsert({
             "key": f"{endpoint_name}#meta",
-            "data": {"chunks": num_chunks, "is_dict": is_dict},
+            "data": {"chunks": num_chunks, "is_dict": is_dict, "total_items": total_items},
             "updated_at": timestamp
         }).execute()
     except: pass
@@ -442,10 +443,7 @@ def map_and_filter(raw, filters, with_photos=False):
 
         if filters:
             if filters.get('art') and filters.get('art') != 'alle' and filters.get('art').lower() != art_label: continue
-            zustand_filter = (filters.get('zustand') or '').lower()
-            if zustand_filter and zustand_filter != 'alle':
-                if zustand_filter == 'neu' and condition != 'NEW': continue
-                if zustand_filter == 'gebraucht' and condition == 'NEW': continue
+            if filters.get('zustand') and filters.get('zustand') != 'alle' and filters.get('zustand').upper() != condition: continue
             if filters.get('psMin') and ps < int(filters.get('psMin')): continue
             if filters.get('psMax') and ps > int(filters.get('psMax')): continue
             if filters.get('preisMin') and preis < int(filters.get('preisMin')): continue
@@ -859,7 +857,7 @@ def sync_all_now():
     # REIHENFOLGE: Kleine Pakete zuerst
     endpoints = {
         "sale/equipment": f"{SYSCARA_BASE}/sale/equipment/",
-        "sale/orders":    f"{SYSCARA_BASE}/sale/orders/?update=2025-01-01",
+        "sale/orders":    f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01",
         "sale/lists":     f"{SYSCARA_BASE}/sale/lists/?list=pictures",
         "sale/vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
         "sale/ads":       f"{SYSCARA_BASE}/sale/ads/"
@@ -879,7 +877,7 @@ def background_sync_loop():
     time.sleep(5)
     while True:
         sync_all_now()
-        time.sleep(43200) # Alle 12 Stunden syncen (12 * 3600)
+        time.sleep(3600)
 
 
 @app.route('/api/sync', methods=['GET', 'POST'])
@@ -1014,8 +1012,8 @@ def api_evaluate_claude():
         return jsonify({"success": False, "error": "ANTHROPIC_API_KEY nicht konfiguriert."}), 503
 
     try:
-        client = _anthropic.Anthropic(api_key=api_key, timeout=60.0)
-        max_tokens = 1800 if model_key == "haiku" else 1800
+        client = _anthropic.Anthropic(api_key=api_key)
+        max_tokens = 2000 if model_key == "haiku" else 4000
         last_error = None
 
         for model_id in model_candidates:
@@ -1201,81 +1199,40 @@ def _build_bi_context() -> str:
     # Fahrzeug-Statistiken
     try:
         raw_veh = _MEM_CACHE.get('sale/vehicles')
-        if not raw_veh:
-            # Fallback: Versuche aus dem Cache zu laden falls MEM_CACHE leer
-            raw_veh = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
-
         if raw_veh:
             vs = build_vehicle_stats(raw_veh)
-            lines.append(f"\nFAHRZEUGBESTAND (Statistiken):")
-            lines.append(f"  Verkaufbar (Bestand): {vs.get('verkaufbar', '?')}")
-            lines.append(f"  Verkauft (Historie): {vs.get('verkauft', '?')}")
-            lines.append(f"  Gesamt (Eindeutig): {vs.get('unique_total', '?')}")
-            lines.append(f"  Durchschnittspreis: {vs.get('avg_preis', 0):,} €")
-
-            if vs.get('getriebe'):
-                g = vs['getriebe']
-                lines.append(f"  Getriebe: Automatik: {g.get('Automatik', 0)}, Schaltung: {g.get('Schaltung', 0)}")
-
+            lines.append(f"\nFahrzeugbestand Gesamt: {vs.get('unique_total', '?')} (davon Verkaufbar: {vs.get('verkaufbar', '?')}, Verkauft: {vs.get('verkauft', '?')})")
+            
+            # BI Context Data Injection
             if vs.get('nach_typ'):
-                lines.append("  Nach Typ:")
-                for t, c in vs['nach_typ'].items():
-                    lines.append(f"    {t}: {c}")
-
+                lines.append(f"  Typen: " + ", ".join(f"{k} ({v})" for k, v in vs['nach_typ'].items() if v > 0))
+            if vs.get('getriebe'):
+                lines.append(f"  Getriebe: " + ", ".join(f"{k} ({v})" for k, v in vs['getriebe'].items() if v > 0))
             if vs.get('heizung'):
-                h = vs['heizung']
-                lines.append(f"  Heizung: Gas: {h.get('Gas', 0)}, Diesel: {h.get('Diesel', 0)}")
-
-            if vs.get('preis_buckets'):
-                lines.append("  Preisklassen:")
-                for b, c in vs['preis_buckets'].items():
-                    lines.append(f"    {b}: {c}")
-
-            if vs.get('exact_lengths'):
-                lines.append("  Exakte Längen (Top 10):")
-                sorted_l = sorted(vs['exact_lengths'].items(), key=lambda x: x[1], reverse=True)
-                for l_label, count in sorted_l[:10]:
-                    lines.append(f"    {l_label}: {count}")
-
-            if vs.get('ps_counts'):
-                lines.append("  Motorisierung (PS):")
-                sorted_ps = sorted(vs['ps_counts'].items(), key=lambda x: x[1], reverse=True)
-                for ps_label, count in sorted_ps[:15]: 
-                    lines.append(f"    {ps_label}: {count}")
-
+                lines.append(f"  Heizung: " + ", ".join(f"{k} ({v})" for k, v in vs['heizung'].items() if v > 0))
             if vs.get('make_counts'):
-                lines.append("\n  Hersteller (Marken):")
-                sorted_makes = sorted(vs['make_counts'].items(), key=lambda x: x[1], reverse=True)
-                for make, count in sorted_makes:
-                    lines.append(f"    {make}: {count}")
-
-            if vs.get('year_counts'):
-                lines.append("\n  Modelljahre:")
-                sorted_years = sorted(vs['year_counts'].items(), key=lambda x: x[0], reverse=True)
-                for yr, count in sorted_years:
-                    lines.append(f"    {yr}: {count}")
-
-            if vs.get('sleeping_counts'):
-                lines.append("\n  Schlafplätze:")
-                sorted_sleep = sorted(vs['sleeping_counts'].items(), key=lambda x: x[0])
-                for sl, count in sorted_sleep:
-                    lines.append(f"    {sl}: {count}")
-
+                lines.append(f"  Marken: " + ", ".join(f"{k} ({v})" for k, v in sorted(vs['make_counts'].items(), key=lambda x: -x[1])[:15] if v > 0))
             if vs.get('condition_counts'):
-                c = vs['condition_counts']
-                lines.append(f"\n  Zustand: NEU: {c.get('NEU',0)}, GEBRAUCHT: {c.get('GEBRAUCHT',0)}")
+                lines.append(f"  Zustand: " + ", ".join(f"{k} ({v})" for k, v in vs['condition_counts'].items() if v > 0))
 
-            if vs.get('type_length_matrix'):
-                lines.append("\n  Spezifische Kombinationen (Typ + Länge):")
-                # Top 20 Kombinationen für Präzision (z.B. Kastenwagen 540cm)
-                sorted_matrix = sorted(vs['type_length_matrix'].items(), key=lambda x: x[1], reverse=True)
-                for combo, count in sorted_matrix[:20]:
-                    lines.append(f"    {combo}: {count}")
+            # Zu große Mappings auf Top-Werte begrenzen, damit Kontext nicht explodiert
+            if vs.get('ps_counts'):
+                top_ps = sorted(vs['ps_counts'].items(), key=lambda x: -x[1])[:12]
+                lines.append(f"  Top PS-Klassen: " + ", ".join(f"{k} ({v})" for k, v in top_ps if v > 0))
+            if vs.get('exact_lengths'):
+                top_lengths = sorted(vs['exact_lengths'].items(), key=lambda x: -x[1])[:12]
+                lines.append(f"  Top Fahrzeuglängen: " + ", ".join(f"{k} ({v})" for k, v in top_lengths if v > 0))
+            if vs.get('year_counts'):
+                top_years = sorted(vs['year_counts'].items(), key=lambda x: x[0], reverse=True)[:8]
+                lines.append(f"  Modelljahre: " + ", ".join(f"{k} ({v})" for k, v in top_years if v > 0))
+            if vs.get('preis_buckets'):
+                lines.append(f"  Preissegmente: " + ", ".join(f"{k} ({v})" for k, v in vs['preis_buckets'].items() if v > 0))
+            if vs.get('bed_types'):
+                top_beds = sorted(vs['bed_types'].items(), key=lambda x: -x[1])[:8]
+                lines.append(f"  Betten-Typen: " + ", ".join(f"{k} ({v})" for k, v in top_beds if v > 0))
 
-            # Zusätzlicher Hinweis für die KI
-            lines.append("\nHinweis: Nutze diese aggregierten Daten für alle Bestandsabfragen. Antworte präzise auf Längenabfragen (z.B. 5,40m = 540cm).")
-    except Exception as e:
-        lines.append(f"\n(Fehler beim Laden der Fahrzeug-Statistiken: {str(e)})")
+    except Exception:
+        pass
 
     return "\n".join(lines)
 

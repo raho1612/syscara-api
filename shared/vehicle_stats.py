@@ -91,6 +91,7 @@ def build_vehicle_stats(
         "dinette": dict(BOOLEAN_BUCKETS),
         "dusche": dict(BOOLEAN_BUCKETS),
         "ps_counts": {},
+        "bed_types": {},
         "gesamt": len(deduped_items),
         "verkaufbar": 0,
         "verfügbar": 0,
@@ -202,6 +203,7 @@ def build_vehicle_stats(
 
         has_hub_bed = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
         has_dinette = "dinette" in features
+        has_shower = "sep_dusche" in features or "dusche" in features
         
         stats["hubbett"]["Ja" if has_hub_bed else "Nein"] += 1
         stats["dinette"]["Ja" if has_dinette else "Nein"] += 1
@@ -240,12 +242,9 @@ def build_vehicle_stats(
             stats.setdefault("sleeping_counts", {})
             stats["sleeping_counts"][f"{sleeping} Schlafplätze"] = stats["sleeping_counts"].get(f"{sleeping} Schlafplätze", 0) + 1
 
-        # 5. Zustand (NEW / USED)
-        zustand = str(vehicle.get("condition", "Unbekannt")).upper()
-        stats.setdefault("condition_counts", {"NEU": 0, "GEBRAUCHT": 0, "UNBEKANNT": 0})
-        if "NEW" in zustand: stats["condition_counts"]["NEU"] += 1
-        elif "USED" in zustand: stats["condition_counts"]["GEBRAUCHT"] += 1
-        else: stats["condition_counts"]["UNBEKANNT"] += 1
+        # 6. Bettentypen extrahieren
+        for bt in bed_types:
+            stats["bed_types"][bt] = stats["bed_types"].get(bt, 0) + 1
 
     stats["verkaufbar"] = marketable_items
     stats["verfügbar"] = marketable_items
