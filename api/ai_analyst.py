@@ -8,30 +8,60 @@ from services.bi_service import (
     _detect_customer_query, _execute_local_customer_query,
     _detect_order_lookup_query, _execute_local_order_lookup,
     _detect_employee_query, _execute_local_employee_query,
-    _build_bi_context, map_and_filter
+    _build_bi_context, map_and_filter, _get_orders
 )
 
 def register_ai_analyst_routes(app):
     
-    def _tool_query_vehicle_inventory(args: dict) -> str:
+    def _tool_query_inventory(args: dict) -> str:
         from collections import Counter
         try:
+            # Check if this is a "sales" query (user asks for sold vehicles in the past)
+            # The AI might pass a year >= 2024
+            year = args.get('jahrMin') or args.get('jahrMax')
+            is_sales_query = args.get('isSalesQuery') or (year and year >= 2024 and 'sale' in str(args).lower())
+            
+            if is_sales_query:
+                # Search in Orders!
+                raw_orders = _get_orders()
+                # Need to map orders to vehicle-like structure for map_and_filter or process directly
+                # Let's process directly for accuracy
+                results = []
+                for o in raw_orders:
+                    # Filter by year
+                    d_str = (o.get('date') or {}).get('create') or ''
+                    if year and not d_str.startswith(str(year)): continue
+                    
+                    veh = o.get('vehicle') or o # Some orders have flat vehicle fields
+                    typeof = str(o.get('typeof') or veh.get('typeof') or '').lower()
+                    
+                    # Filter by Art/Type
+                    if args.get('art') and args.get('art').lower() not in typeof: continue
+                    
+                    # Filter by Length
+                    dim = o.get('dimensions') or veh.get('dimensions') or {}
+                    laenge = dim.get('length', 0)
+                    if args.get('laengeMin') and laenge < float(args.get('laengeMin')) * 100: continue
+                    if args.get('laengeMax') and laenge > float(args.get('laengeMax')) * 100: continue
+                    
+                    results.append(o)
+                
+                count = len(results)
+                return json.dumps({"treffer_anzahl": count, "kontext": "Historische Verkäufe (Aufträge)", "jahr": year, "status": "Erfolg"}, ensure_ascii=False)
+
+            # Standard Inventory Search
             raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
             if not raw: return "Fehler: Fahrzeugdaten konnten nicht geladen werden."
             
             vehicles = map_and_filter(raw, args)
-            
             make_q = str(args.get('make') or '').strip().lower()
             if make_q: vehicles = [v for v in vehicles if make_q in v.get('hersteller', '').lower()]
             
             count = len(vehicles)
-            if count == 0: return "Ergebnis: 0 Fahrzeuge gefunden."
+            if count == 0: return "Ergebnis: 0 Fahrzeuge im aktuellen Bestand gefunden."
             
-            # Verkaufspreise
             prices = [v['preis'] for v in vehicles if v['preis'] > 0]
             avg_preis = sum(prices) / len(prices) if prices else 0
-            
-            # Einkaufspreise
             ek_prices = [float(v.get('ek_preis') or 0) for v in vehicles if float(v.get('ek_preis') or 0) > 0]
             avg_ek = sum(ek_prices) / len(ek_prices) if ek_prices else 0
             
@@ -39,21 +69,11 @@ def register_ai_analyst_routes(app):
                 "treffer_anzahl": count, 
                 "basis_preis_durchschnitt": int(avg_preis),
                 "einkaufspreis_durchschnitt": int(avg_ek),
-                "einkaufspreis_verfügbar": len(ek_prices),
                 "status": "Erfolg"
             }
-            
-            if 0 < count <= 20:
+            if count <= 15:
                 res["beispiele"] = [
-                    {
-                        "marke": v['hersteller'], 
-                        "modell": v['modell'], 
-                        "preis": v['preis_format'], 
-                        "ek_preis": f"{float(v.get('ek_preis') or 0):,.2f}".replace(',','X').replace('.',',').replace('X','.'),
-                        "ps": v['ps'],
-                        "jahr": v['modelljahr'],
-                        "laenge": v['laenge_m']
-                    } for v in vehicles
+                    {"marke": v['hersteller'], "modell": v['modell'], "preis": v['preis_format'], "laenge": v['laenge_m']} for v in vehicles
                 ]
             return json.dumps(res, ensure_ascii=False)
         except Exception as e:
@@ -68,6 +88,7 @@ def register_ai_analyst_routes(app):
         cached = _qcache_get(question)
         if cached: return jsonify({**cached, "cached": True})
 
+        # DSGVO-Bereich
         is_cust, cp = _detect_customer_query(question)
         if is_cust:
             a, t = _execute_local_customer_query(cp)
@@ -99,18 +120,15 @@ def register_ai_analyst_routes(app):
             "type": "function", 
             "function": {
                 "name": "query_inventory", 
-                "description": "Führt Analysen im Fahrzeugbestand durch, inklusive Preisen, Einkaufspreisen und technischen Daten.", 
+                "description": "Werkzeug für Bestandsanalyse UND historische Verkaufszahlen (Aufträge).", 
                 "parameters": {
                     "type": "object", 
                     "properties": {
-                        "art": {"type": "string"}, 
-                        "psMin": {"type": "integer"}, "psMax": {"type": "integer"},
-                        "preisMin": {"type": "integer"}, "preisMax": {"type": "integer"},
-                        "laengeMin": {"type": "number"}, "laengeMax": {"type": "number"},
-                        "make": {"type": "string"},
-                        "zustand": {"type": "string", "enum": ["NEW", "USED"]},
-                        "jahrMin": {"type": "integer"}, "jahrMax": {"type": "integer"},
-                        "schlafplaetzeMin": {"type": "integer"}
+                        "art": {"type": "string", "description": "Fahrzeugtyp (z.B. Kastenwagen)"}, 
+                        "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 5.40)"}, 
+                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 5.40)"},
+                        "jahrMin": {"type": "integer", "description": "Jahr (für historische Verkäufe)"},
+                        "isSalesQuery": {"type": "boolean", "description": "Setze auf true, wenn nach verkauften Fahrzeugen in der Vergangenheit gefragt wird."}
                     }
                 }
             }
@@ -118,9 +136,9 @@ def register_ai_analyst_routes(app):
         
         messages = [
             {"role": "system", "content": (
-                "Du bist der allwissende Syscara-Analyst. Du kannst Verkaufspreise UND Einkaufspreise analysieren.\n"
-                "Nutze das Tool 'query_inventory' für jede Berechnung von Durchschnittspreisen.\n"
-                "Die Einkaufspreise sind im System unter 'prices.purchase' hinterlegt.\n\n"
+                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf den aktuellen Bestand UND das Auftragsarchiv.\n"
+                "Wenn der User fragt 'Wie viele haben wir verkauft?', nutze das Tool 'query_inventory' mit isSalesQuery=true.\n"
+                "5,40m Kastenwagen werden im System oft mit Länge 540 oder 541 cm geführt.\n\n"
                 f"{bi_context}"
             )},
             {"role": "user", "content": question}
@@ -134,23 +152,14 @@ def register_ai_analyst_routes(app):
                 messages.append(msg)
                 for tc in msg.tool_calls:
                     if tc.function.name == "query_inventory":
-                        res = _tool_query_vehicle_inventory(json.loads(tc.function.arguments))
+                        res = _tool_query_inventory(json.loads(tc.function.arguments))
                         messages.append({"role": "tool", "tool_call_id": tc.id, "name": "query_inventory", "content": res})
                 final = client.chat.completions.create(model="gpt-4o", messages=messages)
                 raw = final.choices[0].message.content or ""
             else:
                 raw = msg.content or ""
 
-            import re
-            chart = None
-            match = re.search(r'\[CHART\](.*?)\[/CHART\]', raw, re.DOTALL)
-            if match:
-                try:
-                    chart = json.loads(match.group(1).strip())
-                    raw = raw[:match.start()].rstrip() + raw[match.end():]
-                except: pass
-
-            resp = {"success": True, "answer": raw.strip(), "chart": chart, "table": None, "source": "openai"}
+            resp = {"success": True, "answer": raw.strip(), "chart": None, "table": None, "source": "openai"}
             _qcache_put(question, resp)
             return jsonify(resp)
         except Exception as e:
