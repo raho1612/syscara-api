@@ -93,19 +93,37 @@ def _build_bi_context() -> str:
     
     try:
         items = _get_orders()
-        year_counts = Counter()
-        status_counts = Counter()
+        sales_summary = {} # key: "YYYY-MM"
+        year_totals = Counter()
+        
         for o in items:
             dt = extract_order_datetime(o)
-            if dt: year_counts[dt.year] += 1
-            s = o.get('status', {})
-            status = (s.get('key') or s.get('label')) if isinstance(s, dict) else str(s or '')
-            if status: status_counts[status] += 1
+            if not dt:
+                continue
             
-        lines.append(f"\nAUFTRÄGE GESAMT: {len(items)}")
-        lines.append(f"Verteilung: " + ", ".join([f"{yr}: {cnt}" for yr, cnt in sorted(year_counts.items(), reverse=True)]))
-        lines.append(f"Top Status: " + ", ".join([f"{st}: {cnt}" for st, cnt in status_counts.most_common(5)]))
-    except: pass
+            y_m = dt.strftime("%Y-%m")
+            year = dt.year
+            
+            # Nur relevante Jahre für die KI zusammenfassen
+            if 2024 <= year <= 2026:
+                sales_summary[y_m] = sales_summary.get(y_m, 0) + 1
+                year_totals[year] += 1
+            
+        lines.append(f"\nUHRZEIT / DATUM: {_dt.datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        lines.append(f"AUFTRÄGE GESAMT IM SYSTEM: {len(items)}")
+        
+        lines.append("\nVERKAUFSZAHLEN PRO JAHR:")
+        for yr in sorted(year_totals.keys(), reverse=True):
+            lines.append(f"  {yr}: {year_totals[yr]} Fahrzeuge")
+            
+        lines.append("\nVERKAUFSZAHLEN MONATLICH (DETAILLIERT):")
+        # Zeige die letzten 15 Monate für präzise Fragen
+        sorted_months = sorted(sales_summary.keys(), reverse=True)
+        for m_key in sorted_months[:15]:
+            month_name = _dt.datetime.strptime(m_key, "%Y-%m").strftime("%B %Y")
+            lines.append(f"  {month_name}: {sales_summary[m_key]}")
+    except Exception as e:
+        lines.append(f"\nFehler bei Verkaufsdaten-Aggregation: {str(e)}")
 
     try:
         raw_veh = _MEM_CACHE.get('sale/vehicles') or get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
