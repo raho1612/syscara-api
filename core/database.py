@@ -111,16 +111,23 @@ def load_from_supabase_chunked(endpoint_name):
 
 def get_cached_or_fetch(endpoint_name, url):
     if endpoint_name in _MEM_CACHE: return _MEM_CACHE[endpoint_name]
+    print(f"[FETCH] Starte Abruf: {endpoint_name} von {url}", flush=True)
     try:
         response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=60)
         response.raise_for_status()
         data = response.json()
+        print(f"[FETCH] Erfolg: {endpoint_name} ({len(iter_items(data))} Items)", flush=True)
         save_to_supabase_chunked(endpoint_name, data)
         _MEM_CACHE[endpoint_name] = data
         return data
-    except Exception:
+    except Exception as e:
+        print(f"[FETCH] Fehler bei Live-Abruf {endpoint_name}: {e}. Versuche Cache...", flush=True)
         data = load_from_supabase_chunked(endpoint_name)
-        if data: _MEM_CACHE[endpoint_name] = data
+        if data:
+            print(f"[CACHE] Erfolg: {endpoint_name} aus Supabase geladen.", flush=True)
+            _MEM_CACHE[endpoint_name] = data
+        else:
+            print(f"[CACHE] Fehlgeschlagen: {endpoint_name} ist komplett leer.", flush=True)
         return data
 
 def fetch_live_then_cache(endpoint_name, url, *, allow_stale_fallback=False):
