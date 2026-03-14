@@ -14,17 +14,21 @@ from services.bi_service import (
 def register_ai_analyst_routes(app):
     
     def _tool_query_inventory(args: dict) -> str:
-        from collections import Counter
+        from core.utils import extract_order_datetime
         try:
             year = args.get('jahrMin') or args.get('jahrMax')
-            is_sales_query = args.get('isSalesQuery') or (year and year >= 2024 and 'sale' in str(args).lower())
+            month = args.get('monat') # Optionaler Parameter (1-12)
+            is_sales_query = args.get('isSalesQuery') or (year and year >= 2024)
             
             if is_sales_query:
                 raw_orders = _get_orders()
                 results = []
                 for o in raw_orders:
-                    d_str = (o.get('date') or {}).get('create') or ''
-                    if year and not d_str.startswith(str(year)): continue
+                    dt = extract_order_datetime(o)
+                    if not dt: continue
+                    
+                    if year and dt.year != int(year): continue
+                    if month and dt.month != int(month): continue
                     
                     veh = o.get('vehicle') or o
                     typeof = str(o.get('typeof') or veh.get('typeof') or '').lower()
@@ -35,7 +39,6 @@ def register_ai_analyst_routes(app):
                     if args.get('laengeMin') and laenge < float(args.get('laengeMin')) * 100: continue
                     if args.get('laengeMax') and laenge > float(args.get('laengeMax')) * 100: continue
                     
-                    # Keyword search in orders too
                     if args.get('q'):
                         q_str = str(args.get('q')).lower()
                         full_txt = str(o).lower()
@@ -44,7 +47,17 @@ def register_ai_analyst_routes(app):
                     results.append(o)
                 
                 count = len(results)
-                return json.dumps({"treffer_anzahl": count, "kontext": "Historische Verkäufe (Aufträge)", "jahr": year, "status": "Erfolg"}, ensure_ascii=False)
+                res_txt = f"{count} Verkäufe gefunden."
+                if year: res_txt += f" Jahr: {year}"
+                if month: res_txt += f" Monat: {month}"
+                
+                return json.dumps({
+                    "treffer_anzahl": count, 
+                    "beschreibung": res_txt,
+                    "jahr": year,
+                    "monat": month,
+                    "status": "Erfolg"
+                }, ensure_ascii=False)
 
             # Standard Inventory Search
             raw = get_cached_or_fetch('sale/vehicles', f"{SYSCARA_BASE}/sale/vehicles/")
@@ -133,7 +146,8 @@ def register_ai_analyst_routes(app):
                         "laengeMax": {"type": "number", "description": "Maximallänge (m)"},
                         "hubbett": {"type": "boolean", "description": "Expliziter Filter für Hubbett"},
                         "dusche": {"type": "boolean", "description": "Expliziter Filter für Sep. Dusche"},
-                        "jahrMin": {"type": "integer", "description": "Jahr für Verkäufe"},
+                        "jahrMin": {"type": "integer", "description": "Jahr für Verkäufe (z.B. 2026)"},
+                        "monat": {"type": "integer", "description": "Monat für Verkäufe (1-12)"},
                         "isSalesQuery": {"type": "boolean", "description": "Soll im Auftragsarchiv (Historie) gesucht werden?"}
                     }
                 }
@@ -147,13 +161,14 @@ def register_ai_analyst_routes(app):
                 "1. Für JEDE quantitative Frage (z.B. 'Wie viele...', 'Was ist der Durchschnitt...', 'Wer hat am meisten...') MUSST du das Tool 'query_inventory' verwenden.\n"
                 "2. Beachte das aktuelle Datum: " + _dt.datetime.now().strftime('%d.%m.%Y') + "\n"
                 "3. Wenn du nach Verkaufszahlen (Aufträgen) gefragt wirst, setze 'isSalesQuery': True.\n"
-                "4. Wenn ein Monat/Jahr gefragt ist (z.B. Februar 2026), setze 'jahrMin': 2026 und filtere die Ergebnisse im Tool.\n"
+                "4. Wenn ein Monat/Jahr gefragt ist (z.B. Februar 2026), setze 'jahrMin': 2026 und 'monat': 2 (für Februar) im Tool.\n"
                 "5. Vertraue NICHT nur auf den Text im System-Prompt, wenn ein Tool vorhanden ist.\n"
                 "\nKontext-Zusammenfassung (für schnellen Überblick):\n"
                 f"{bi_context}"
             )},
             {"role": "user", "content": question}
         ]
+        print(f"--- AI ANALYST CONTEXT ---\n{bi_context}\n-------------------------", flush=True)
         
         try:
             comp = client.chat.completions.create(model="gpt-4o", messages=messages, tools=tools, tool_choice="auto")
