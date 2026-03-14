@@ -16,34 +16,31 @@ def register_ai_analyst_routes(app):
     def _tool_query_inventory(args: dict) -> str:
         from collections import Counter
         try:
-            # Check if this is a "sales" query (user asks for sold vehicles in the past)
-            # The AI might pass a year >= 2024
             year = args.get('jahrMin') or args.get('jahrMax')
             is_sales_query = args.get('isSalesQuery') or (year and year >= 2024 and 'sale' in str(args).lower())
             
             if is_sales_query:
-                # Search in Orders!
                 raw_orders = _get_orders()
-                # Need to map orders to vehicle-like structure for map_and_filter or process directly
-                # Let's process directly for accuracy
                 results = []
                 for o in raw_orders:
-                    # Filter by year
                     d_str = (o.get('date') or {}).get('create') or ''
                     if year and not d_str.startswith(str(year)): continue
                     
-                    veh = o.get('vehicle') or o # Some orders have flat vehicle fields
+                    veh = o.get('vehicle') or o
                     typeof = str(o.get('typeof') or veh.get('typeof') or '').lower()
-                    
-                    # Filter by Art/Type
                     if args.get('art') and args.get('art').lower() not in typeof: continue
                     
-                    # Filter by Length
                     dim = o.get('dimensions') or veh.get('dimensions') or {}
                     laenge = dim.get('length', 0)
                     if args.get('laengeMin') and laenge < float(args.get('laengeMin')) * 100: continue
                     if args.get('laengeMax') and laenge > float(args.get('laengeMax')) * 100: continue
                     
+                    # Keyword search in orders too
+                    if args.get('q'):
+                        q_str = str(args.get('q')).lower()
+                        full_txt = str(o).lower()
+                        if q_str not in full_txt: continue
+
                     results.append(o)
                 
                 count = len(results)
@@ -78,8 +75,7 @@ def register_ai_analyst_routes(app):
                         "modell": v['modell'], 
                         "preis": v['preis_format'], 
                         "laenge": v['laenge_m'],
-                        "hubbett": "Ja" if v.get('has_hubbett') else "Nein",
-                        "dusche": "Ja" if v.get('has_dusche') else "Nein"
+                        "ausstattung": v.get('ausstattung', '')[:200]
                     } for v in vehicles
                 ]
             return json.dumps(res, ensure_ascii=False)
@@ -127,17 +123,18 @@ def register_ai_analyst_routes(app):
             "type": "function", 
             "function": {
                 "name": "query_inventory", 
-                "description": "Werkzeug für Bestandsanalyse (inkl. Hubbett, Dusche, Preis, EK) UND historische Verkaufszahlen (Aufträge).", 
+                "description": "UNIVERSAL-SUCHE für Bestand (VK/EK/Ausstattung) und historische Aufträge.", 
                 "parameters": {
                     "type": "object", 
                     "properties": {
-                        "art": {"type": "string", "description": "Fahrzeugtyp (z.B. Kastenwagen, Teilintegriert)"}, 
-                        "laengeMin": {"type": "number", "description": "Mindestlänge in METERN (z.B. 5.40)"}, 
-                        "laengeMax": {"type": "number", "description": "Maximallänge in METERN (z.B. 7.50)"},
-                        "hubbett": {"type": "boolean", "description": "Filtere nach Fahrzeugen MIT Hubbett (Dropdown bed)"},
-                        "dusche": {"type": "boolean", "description": "Filtere nach Fahrzeugen MIT separater Dusche"},
-                        "jahrMin": {"type": "integer", "description": "Jahr (für historische Verkäufe)"},
-                        "isSalesQuery": {"type": "boolean", "description": "Setze auf true, wenn nach verkauften Fahrzeugen in der Vergangenheit gefragt wird."}
+                        "q": {"type": "string", "description": "Suchbegriff für Ausstattung (z.B. 'hubbett', 'markise', 'solar')"},
+                        "art": {"type": "string", "description": "Fahrzeugtyp (z.B. Kastenwagen)"}, 
+                        "laengeMin": {"type": "number", "description": "Mindestlänge (m)"}, 
+                        "laengeMax": {"type": "number", "description": "Maximallänge (m)"},
+                        "hubbett": {"type": "boolean", "description": "Expliziter Filter für Hubbett"},
+                        "dusche": {"type": "boolean", "description": "Expliziter Filter für Sep. Dusche"},
+                        "jahrMin": {"type": "integer", "description": "Jahr für Verkäufe"},
+                        "isSalesQuery": {"type": "boolean", "description": "Soll im Auftragsarchiv (Historie) gesucht werden?"}
                     }
                 }
             }
@@ -145,8 +142,9 @@ def register_ai_analyst_routes(app):
         
         messages = [
             {"role": "system", "content": (
-                "Du bist der allwissende Syscara-Analyst. Du hast Zugriff auf Ausstattung (Hubbett, Dusche), Preise (VK/EK) und Aufträge.\n"
-                "Wenn der User nach Hubbetten fragt, nutze das Tool 'query_inventory' mit hubbett=true.\n"
+                "Du bist der allwissende Syscara-Analyst. Du hast VOLLZUGRIFF auf alle Daten via Tool.\n"
+                "Nutze den Parameter 'q' im Tool 'query_inventory', um nach JEDEM beliebigen Ausstattungsmerkmal zu suchen (z.B. Klima, Solar, TV).\n"
+                "Wenn der User nach Hubbetten fragt, nutze hubbett=True UND q='hubbett'.\n"
                 "5,40m Kastenwagen werden im System oft mit Länge 540 oder 541 cm geführt.\n\n"
                 f"{bi_context}"
             )},

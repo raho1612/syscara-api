@@ -38,16 +38,24 @@ def map_and_filter(raw, filters, with_photos=False):
         features = v.get('features', [])
         if not isinstance(features, list): features = []
         
+        # Komplett-Check Ausstattung
         beds_list = beds_d.get('beds', []) if isinstance(beds_d.get('beds'), list) else []
         bed_types = [str(bed.get('type', "")).upper() for bed in beds_list if isinstance(bed, dict)]
-        has_hubbett = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
-        has_dusche = 'sep_dusche' in features or 'dusche' in features
+        has_hubbett = any(x in bed_types for x in ["PULL_BED", "ROOF_BED", "HUBBETT"])
+        has_dusche = 'sep_dusche' in features or 'dusche' in features or 'sep. dusche' in str(features).lower()
+        
+        all_feats = list(features) + bed_types + [str(v.get('typeof','')), str(v.get('model',{}).get('model',''))]
+        feat_str = ", ".join(filter(None, all_feats)).lower()
+
         gear_raw = str(engine.get('gear', '') or engine.get('gearbox', '')).upper()
         has_auto = any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"])
         condition = str(v.get('condition', '')).upper()
 
         if filters:
             if filters.get('art') and filters.get('art').lower() not in art_label: continue
+            if filters.get('q'):
+                q = str(filters.get('q')).lower()
+                if q not in feat_str and q not in art_label: continue
             if filters.get('zustand') and filters.get('zustand').upper() != condition: continue
             if filters.get('psMin') and ps < int(filters.get('psMin')): continue
             if filters.get('psMax') and ps > int(filters.get('psMax')): continue
@@ -68,7 +76,8 @@ def map_and_filter(raw, filters, with_photos=False):
             "id": v.get('id'), "hersteller": model.get('producer', '-'), "modell": model.get('model', '-'),
             "preis": preis, "ek_preis": ek_preis, "preis_format": fmt_preis(preis), "ps": ps, "laenge_m": f"{laenge/100:.2f}",
             "modelljahr": modelljahr, "getriebe": "Automatik" if has_auto else "Schaltung", "zustand": condition,
-            "typ": art_label, "schlafplaetze": schlafplaetze, "has_hubbett": has_hubbett, "has_dusche": has_dusche
+            "typ": art_label, "schlafplaetze": schlafplaetze, "ausstattung": feat_str,
+            "has_hubbett": has_hubbett, "has_dusche": has_dusche
         })
     return vehicles
 
