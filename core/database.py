@@ -73,8 +73,16 @@ def save_to_supabase_chunked(endpoint_name, data):
 
         try:
             supabase.table("api_cache").upsert({"key": chunk_key, "data": chunk_data, "updated_at": timestamp}).execute()
-        except Exception:
+        except Exception as e:
+            print(f"[CACHE] Fehler beim Upsert von {chunk_key}: {e}", flush=True)
             return False
+
+    # NEU: Speichere Meta-Informationen, damit wir wissen, wie viele Chunks wir laden müssen
+    try:
+        meta_data = {"chunks": num_chunks, "is_dict": is_dict, "total": total_items}
+        supabase.table("api_cache").upsert({"key": f"{endpoint_name}#meta", "data": meta_data, "updated_at": timestamp}).execute()
+    except Exception as e:
+        print(f"[CACHE] Fehler beim Speichern der Meta-Daten für {endpoint_name}: {e}", flush=True)
 
     try:
         local_path = CACHE_DIR / f"{endpoint_name.replace('/', '_')}.json"
@@ -113,7 +121,8 @@ def get_cached_or_fetch(endpoint_name, url):
     if endpoint_name in _MEM_CACHE: return _MEM_CACHE[endpoint_name]
     print(f"[FETCH] Starte Abruf: {endpoint_name} von {url}", flush=True)
     try:
-        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=60)
+        # Timeout auf 120s erhöht für große Bestände
+        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=120)
         response.raise_for_status()
         data = response.json()
         print(f"[FETCH] Erfolg: {endpoint_name} ({len(iter_items(data))} Items)", flush=True)
