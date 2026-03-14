@@ -1,6 +1,6 @@
 import os
 import json
-import time
+import datetime as _dt
 from flask import jsonify, request
 from core.config import HAS_OPENAI, SYSCARA_BASE
 from core.database import get_cached_or_fetch, _qcache_get, _qcache_put
@@ -142,10 +142,14 @@ def register_ai_analyst_routes(app):
         
         messages = [
             {"role": "system", "content": (
-                "Du bist der allwissende Syscara-Analyst. Du hast VOLLZUGRIFF auf alle Daten via Tool.\n"
-                "Nutze den Parameter 'q' im Tool 'query_inventory', um nach JEDEM beliebigen Ausstattungsmerkmal zu suchen (z.B. Klima, Solar, TV).\n"
-                "Wenn der User nach Hubbetten fragt, nutze hubbett=True UND q='hubbett'.\n"
-                "5,40m Kastenwagen werden im System oft mit Länge 540 oder 541 cm geführt.\n\n"
+                "Du bist der Syscara-BI-Experte. Du hast Zugriff auf ECHTZEIT-DATEN über Tools.\n"
+                "BEFOLGE DIESE REGELN STRENG:\n"
+                "1. Für JEDE quantitative Frage (z.B. 'Wie viele...', 'Was ist der Durchschnitt...', 'Wer hat am meisten...') MUSST du das Tool 'query_inventory' verwenden.\n"
+                "2. Beachte das aktuelle Datum: " + _dt.datetime.now().strftime('%d.%m.%Y') + "\n"
+                "3. Wenn du nach Verkaufszahlen (Aufträgen) gefragt wirst, setze 'isSalesQuery': True.\n"
+                "4. Wenn ein Monat/Jahr gefragt ist (z.B. Februar 2026), setze 'jahrMin': 2026 und filtere die Ergebnisse im Tool.\n"
+                "5. Vertraue NICHT nur auf den Text im System-Prompt, wenn ein Tool vorhanden ist.\n"
+                "\nKontext-Zusammenfassung (für schnellen Überblick):\n"
                 f"{bi_context}"
             )},
             {"role": "user", "content": question}
