@@ -15,6 +15,7 @@ def register_ai_analyst_routes(app):
     
     def _tool_query_inventory(args: dict) -> str:
         from core.utils import extract_order_datetime
+        print(f"[TOOL] KI-Analyst ruft query_inventory auf mit: {args}", flush=True)
         try:
             year = args.get('jahrMin') or args.get('jahrMax')
             month = args.get('monat') # Optionaler Parameter (1-12)
