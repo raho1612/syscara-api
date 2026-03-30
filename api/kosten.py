@@ -59,9 +59,9 @@ def _extract_order_date(order: dict) -> str:
 
 
 def _load_orders() -> list:
-    # sale/orders_full = vollständiger Bulk-Sync (2022–2026), kein Datumslimit
+    # sale/orders = Standard Bulk-Sync (ab 2024) - identisch mit sync_service
     orders_raw = get_cached_or_fetch(
-        "sale/orders_full", f"{SYSCARA_BASE}/sale/orders/?update=2022-01-01"
+        "sale/orders", f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01"
     )
     if isinstance(orders_raw, dict) and "orders" in orders_raw:
         return orders_raw["orders"]
@@ -136,7 +136,7 @@ def register_kosten_routes(app):
         art_filter = (request.args.get("art") or "alle").lower()
         top_n = max(0, int(request.args.get("top_n") or 0))
 
-        raw = get_cached_or_fetch("sale/vehicles_full", f"{SYSCARA_BASE}/sale/vehicles/")
+        raw = get_cached_or_fetch("sale/vehicles", f"{SYSCARA_BASE}/sale/vehicles/")
         orders = _load_orders()
         employee_names = _load_employee_names()
 
