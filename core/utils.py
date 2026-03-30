@@ -1,9 +1,8 @@
 import json
-import requests
 import os
 from datetime import datetime
 from pathlib import Path
-from requests.auth import HTTPBasicAuth
+
 
 def iter_items(raw):
     if isinstance(raw, dict): return list(raw.values())
@@ -62,7 +61,7 @@ def fmt_preis(preis):
         return str(preis)
 
 def _candidate_file_paths(filename, env_var=None):
-    from core.config import ROOT_DIR, CURRENT_DIR
+    from core.config import CURRENT_DIR, ROOT_DIR
     candidates = []
     if env_var:
         override = os.getenv(env_var)

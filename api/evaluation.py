@@ -1,6 +1,8 @@
 import os
+
+from core.config import HAS_CLAUDE, HAS_GEMINI, HAS_OPENAI
 from flask import jsonify, request
-from core.config import HAS_OPENAI, HAS_CLAUDE, HAS_GEMINI
+
 
 def register_evaluation_routes(app):
 
@@ -10,7 +12,7 @@ def register_evaluation_routes(app):
         body = request.get_json(silent=True) or {}
         data = str(body.get('data', ''))[:5000]
         instruction = str(body.get('instruction', ''))[:3000] or "Agiere als Fahrzeugexperte."
-        
+
         import openai
         client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         try:
@@ -24,37 +26,36 @@ def register_evaluation_routes(app):
         body = request.get_json(silent=True) or {}
         data = str(body.get('data', ''))[:5000]
         instruction = str(body.get('instruction', ''))[:3000] or "Agiere als Fahrzeugexperte."
-        
+
         req_model = body.get('model', 'sonnet')
-        
+
         # Reale Modelle mit Fallback-Reihenfolge
         if req_model == 'haiku':
             candidates = ["claude-3-5-haiku-latest", "claude-3-5-haiku-20241022", "claude-3-haiku-20240307"]
         else:
             candidates = ["claude-3-7-sonnet-latest", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-latest", "claude-3-5-sonnet-20241022"]
-        
+
         import anthropic
         client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        
+
         last_error = None
         for model_id in candidates:
             try:
                 res = client.messages.create(
-                    model=model_id, 
-                    max_tokens=4000, 
-                    system=instruction, 
+                    model=model_id,
+                    max_tokens=4000,
+                    system=instruction,
                     messages=[{"role": "user", "content": data}]
                 )
                 return jsonify({"success": True, "text": res.content[0].text, "model": model_id})
             except Exception as e:
                 last_error = str(e)
-                # Wenn das Modell nicht gefunden wurde (404) -> Fallback auf das nächste in der Liste
+                # Fallback bei 404 (nicht gefunden)
                 if "not_found" in last_error.lower() or "404" in last_error:
                     continue
-                # Andere Fehler (Quota, Auth) sofort melden
                 return jsonify({"success": False, "error": last_error}), 500
-        
-        return jsonify({"success": False, "error": f"Alle Claude Modelle (inkl. Fallbacks) nicht verfügbar: {last_error}"}), 500
+
+        return jsonify({"success": False, "error": f"Alle Claude Modelle fehlgeschlagen: {last_error}"}), 500
 
     @app.route('/api/evaluate-gemini', methods=['POST'])
     def api_evaluate_gemini():
@@ -62,7 +63,7 @@ def register_evaluation_routes(app):
         body = request.get_json(silent=True) or {}
         data = str(body.get('data', ''))[:5000]
         instruction = str(body.get('instruction', ''))[:3000] or "Agiere als Fahrzeugexperte."
-        
+
         import google.generativeai as genai
         genai.configure(api_key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"))
         try:

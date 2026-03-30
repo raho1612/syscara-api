@@ -1,7 +1,9 @@
-import time
 import threading
+import time
+
 from core.config import SYSCARA_BASE
-from core.database import get_cached_or_fetch, _MEM_CACHE, _QUESTION_CACHE
+from core.database import _MEM_CACHE, _QUESTION_CACHE, get_cached_or_fetch
+
 
 def sync_all_now():
     print("\n--- [BACKGROUND SYNC] Start ---", flush=True)

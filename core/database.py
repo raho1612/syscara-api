@@ -1,12 +1,11 @@
-import os
-import math
-import time
 import json
+import math
+import os
+import time
+
 import requests
-from pathlib import Path
+from core.config import CURRENT_DIR, SYSCARA_PASS, SYSCARA_USER
 from requests.auth import HTTPBasicAuth
-from core.config import SYSCARA_BASE, SYSCARA_USER, SYSCARA_PASS, CURRENT_DIR
-from shared.logging_utils import log_blackbox
 
 # Supabase Initialisierung
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -51,7 +50,8 @@ def _qcache_put(q: str, response: dict):
 
 def iter_items(raw):
     if isinstance(raw, dict): return list(raw.values())
-    return raw if isinstance(raw, list) else []
+    if isinstance(raw, list): return raw
+    return []
 
 def save_to_supabase_chunked(endpoint_name, data):
     if not supabase: return False
@@ -59,9 +59,9 @@ def save_to_supabase_chunked(endpoint_name, data):
     total_items = len(items)
     is_dict = isinstance(data, dict)
     keys_list = list(data.keys()) if is_dict else []
-    
+
     if total_items == 0: return True
-    
+
     num_chunks = math.ceil(total_items / CHUNK_SIZE)
     timestamp = int(time.time())
 
@@ -73,16 +73,8 @@ def save_to_supabase_chunked(endpoint_name, data):
 
         try:
             supabase.table("api_cache").upsert({"key": chunk_key, "data": chunk_data, "updated_at": timestamp}).execute()
-        except Exception as e:
-            print(f"[CACHE] Fehler beim Upsert von {chunk_key}: {e}", flush=True)
+        except Exception:
             return False
-
-    # NEU: Speichere Meta-Informationen, damit wir wissen, wie viele Chunks wir laden müssen
-    try:
-        meta_data = {"chunks": num_chunks, "is_dict": is_dict, "total": total_items}
-        supabase.table("api_cache").upsert({"key": f"{endpoint_name}#meta", "data": meta_data, "updated_at": timestamp}).execute()
-    except Exception as e:
-        print(f"[CACHE] Fehler beim Speichern der Meta-Daten für {endpoint_name}: {e}", flush=True)
 
     try:
         local_path = CACHE_DIR / f"{endpoint_name.replace('/', '_')}.json"
@@ -110,8 +102,7 @@ def load_from_supabase_chunked(endpoint_name):
                 if is_dict: combined.update(res.data[0]["data"])
                 else: combined.extend(res.data[0]["data"])
         return combined
-    except Exception as e:
-        print(f"[CACHE] Fehler beim Laden von {endpoint_name} aus Supabase: {e}", flush=True)
+    except:
         local_path = CACHE_DIR / f"{endpoint_name.replace('/', '_')}.json"
         if local_path.exists():
             with open(local_path, "r", encoding="utf-8") as f:
@@ -120,36 +111,21 @@ def load_from_supabase_chunked(endpoint_name):
 
 def get_cached_or_fetch(endpoint_name, url):
     if endpoint_name in _MEM_CACHE: return _MEM_CACHE[endpoint_name]
-    print(f"[FETCH] Starte Abruf: {endpoint_name} von {url}", flush=True)
-    log_blackbox("FETCH_START", {"endpoint": endpoint_name, "url": url})
     try:
-        # Timeout auf 120s erhöht für große Bestände
-        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=120)
+        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=180)
         response.raise_for_status()
         data = response.json()
-        count = len(iter_items(data))
-        print(f"[FETCH] Erfolg: {endpoint_name} ({count} Items)", flush=True)
-        log_blackbox("FETCH_SUCCESS", {"endpoint": endpoint_name, "count": count})
         save_to_supabase_chunked(endpoint_name, data)
         _MEM_CACHE[endpoint_name] = data
         return data
-    except Exception as e:
-        print(f"[FETCH] Fehler bei Live-Abruf {endpoint_name}: {e}. Versuche Cache...", flush=True)
-        log_blackbox("FETCH_ERROR", {"endpoint": endpoint_name, "error": str(e)})
+    except Exception:
         data = load_from_supabase_chunked(endpoint_name)
-        if data:
-            count = len(iter_items(data))
-            print(f"[CACHE] Erfolg: {endpoint_name} aus Supabase geladen. ({count} Items)", flush=True)
-            log_blackbox("CACHE_READ", {"endpoint": endpoint_name, "count": count})
-            _MEM_CACHE[endpoint_name] = data
-        else:
-            print(f"[CACHE] Fehlgeschlagen: {endpoint_name} ist komplett leer.", flush=True)
-            log_blackbox("CACHE_EMPTY", {"endpoint": endpoint_name})
+        if data: _MEM_CACHE[endpoint_name] = data
         return data
 
 def fetch_live_then_cache(endpoint_name, url, *, allow_stale_fallback=False):
     try:
-        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=60)
+        response = requests.get(url, auth=HTTPBasicAuth(SYSCARA_USER, SYSCARA_PASS), timeout=180)
         response.raise_for_status()
         data = response.json()
         save_to_supabase_chunked(endpoint_name, data)

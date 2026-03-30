@@ -169,7 +169,7 @@ def build_vehicle_stats(
             else:
                 length_bucket = "> 8m"
             stats["laenge_buckets"][length_bucket] += 1
-            
+
             # NEU: Matrix für hochspezifische Anfragen (z.B. Kastenwagen 540)
             stats.setdefault("type_length_matrix", {})
             matrix_key = f"{art_label} {length}cm"
@@ -204,19 +204,19 @@ def build_vehicle_stats(
         has_hub_bed = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
         has_dinette = "dinette" in features
         has_shower = "sep_dusche" in features or "dusche" in features
-        
+
         stats["hubbett"]["Ja" if has_hub_bed else "Nein"] += 1
         stats["dinette"]["Ja" if has_dinette else "Nein"] += 1
         stats["dusche"]["Ja" if has_shower else "Nein"] += 1
 
         # --- NEU: Universelle Datenextraktion für KI-Analyst ---
-        
+
         # 1. PS (prüfe sowohl power als auch ps Feld)
         ps = engine.get("ps") or engine.get("power") or 0
         if ps:
             ps_key = f"{ps} PS"
             stats["ps_counts"][ps_key] = stats["ps_counts"].get(ps_key, 0) + 1
-            
+
         # 1b. Exakte Längen
         if length:
             l_key = f"{length}cm"
