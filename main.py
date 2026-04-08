@@ -4,7 +4,8 @@ from pathlib import Path
 
 def _read_api_version() -> str:
     try:
-        return Path("/app/api_version.txt").read_text().strip() or "unknown"
+        v = Path("/app/api_version.txt").read_text().strip()
+        return v if v else "unknown"
     except Exception:
         return "unknown"
 
@@ -69,7 +70,7 @@ def api_diag():
         {
             "success": True,
             "modular": True,
-            "api_version": os.getenv("SYSCARA_API_VERSION") or _read_api_version(),
+            "api_version": _read_api_version(),
             "employee_names_exists": len(emp_names) > 0,
             "employee_names_count": len(emp_names),
             "has_openai_lib": has_openai,
