@@ -13,7 +13,7 @@ COPY api ./api
 COPY core ./core
 COPY services ./services
 COPY shared ./shared
-RUN cat VERSION 2>/dev/null > /app/api_version.txt || printf 'unknown' > /app/api_version.txt
+RUN date -u '+build-%Y%m%d-%H%M' > /app/api_version.txt
 
 ENV PORT=5000
 EXPOSE 5000
