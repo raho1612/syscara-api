@@ -13,9 +13,7 @@ COPY api ./api
 COPY core ./core
 COPY services ./services
 COPY shared ./shared
-
-ARG SYSCARA_API_VERSION=unknown
-RUN printf '%s' "$SYSCARA_API_VERSION" > /app/api_version.txt
+RUN cat VERSION 2>/dev/null > /app/api_version.txt || printf 'unknown' > /app/api_version.txt
 
 ENV PORT=5000
 EXPOSE 5000
