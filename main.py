@@ -1,4 +1,12 @@
 import os
+from pathlib import Path
+
+
+def _read_api_version() -> str:
+    try:
+        return Path("/app/api_version.txt").read_text().strip() or "unknown"
+    except Exception:
+        return "unknown"
 
 from api.ai_analyst import register_ai_analyst_routes
 from api.evaluation import register_evaluation_routes
@@ -61,7 +69,7 @@ def api_diag():
         {
             "success": True,
             "modular": True,
-            "api_version": os.getenv("SYSCARA_API_VERSION", "v2.0.0-modular"),
+            "api_version": os.getenv("SYSCARA_API_VERSION") or _read_api_version(),
             "employee_names_exists": len(emp_names) > 0,
             "employee_names_count": len(emp_names),
             "has_openai_lib": has_openai,
