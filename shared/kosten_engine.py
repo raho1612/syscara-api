@@ -25,6 +25,16 @@ STANDTAGE_DEFAULTS = {
 
 STANDKOSTEN_ZINS = float(os.getenv("STANDKOSTEN_ZINS", "0.05"))
 
+def _is_vehicle_item(name: str, price: float) -> bool:
+    """
+    Filtert Fahrzeug-Basiskosten aus Werkstattaufträgen.
+    Reisemobil-Fahrzeuge kosten in der Regel > 30.000 Euro. 
+    Werkstatt-Einzelpositionen (Teile/Arbeit) liegen fast immer deutlich darunter.
+    """
+    if price >= 30000:
+        return True
+    return False
+
 def _safe_float(val) -> float:
     if val is None:
         return 0.0
@@ -187,6 +197,10 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict, dict]:
                             kosten_items_idx.setdefault(jk, []).append(entry)
                 elif billing == "CUSTOMER":
                     if price > 0:
+                        # FIX: Falls die Position das Basisfahrzeug selbst darstellt -> Überspringen
+                        if _is_vehicle_item(item_name, price):
+                            continue
+                            
                         entry = {"name": item_name, "betrag": round(price, 2), "typ": "erloes"}
                         for jk in join_keys:
                             erloes_idx[jk] = erloes_idx.get(jk, 0.0) + price
@@ -397,6 +411,8 @@ def calculate_deckungsbeitrag(
     """
     raw_v = get_cached_or_fetch("sale/vehicles", f"{SYSCARA_BASE}/sale/vehicles/")
     orders = _load_orders()
+    work_orders = _load_work_orders()
+    _, erloes_idx, _, erloes_items_idx = _build_work_index(work_orders)
 
     vehicle_expenses = {}
     for o in orders:
@@ -434,9 +450,18 @@ def calculate_deckungsbeitrag(
         dimensions = v.get("dimensions", {}) or {}
         if isinstance(dimensions, list): dimensions = dimensions[0] if dimensions else {}
         laenge_cm = int(_safe_float(dimensions.get("length")))
-        vk = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
-        ek = _safe_float(prices.get("purchase"))
-        if vk <= 0:
+        
+        # EK-Basis (Netto vs Brutto)
+        ek_netto = _safe_float(prices.get("purchase"))
+        ek_brutto = _safe_float(prices.get("purchase_gross")) or ek_netto
+        
+        # Falls Netto == Brutto -> Differenzbesteuerung (Privateinkauf)
+        is_diff_tax = False
+        if ek_brutto > 0 and abs(ek_brutto - ek_netto) < 0.01:
+            is_diff_tax = True
+            
+        vk_brutto = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
+        if vk_brutto <= 0:
             continue
 
         status = str(v.get("status", "")).upper()
@@ -444,7 +469,6 @@ def calculate_deckungsbeitrag(
             continue
 
         make = str(model.get("producer", "")).lower()
-
         if art_filter != "alle" and art_filter not in typ:
             continue
         if marke_filter != "alle" and marke_filter not in make:
@@ -464,28 +488,64 @@ def calculate_deckungsbeitrag(
         standtage_default = STANDTAGE_DEFAULTS.get(typ, STANDTAGE_DEFAULTS["default"])
         v_id = str(v.get("id") or v.get("uid") or "")
         join_keys = _vehicle_join_keys(v)
-        wk_kosten = next((vehicle_expenses[key] for key in join_keys if key in vehicle_expenses), 0.0)
+        vin = identifier.get("vin", "").upper()
+        f_key = join_keys[0] if join_keys else ""
+        
+        # 1. Einkaufskosten (Inland/Eingangsrechnungen)
+        purchase_expenses = next((vehicle_expenses[key] for key in join_keys if key in vehicle_expenses), 0.0)
+        
+        # 2. Werkstatt-Kosten & Erlöse aus dem Workshop-Modul
+        # Interne Aufträge = Kosten für das Fahrzeug
+        w_kosten_intern = kosten_idx.get(vin, 0.0) + kosten_idx.get(f_key, 0.0)
+        
+        # Kunden-Aufträge (Zusatzumsatz laut User oft in VK inkludiert)
+        w_erloes = erloes_idx.get(vin, 0.0) + erloes_idx.get(f_key, 0.0)
+        
+        # Kombinierte Detail-Liste (BELS) für das Dashboard
+        # Wir sammeln sowohl Kosten-Posten als auch Erlös-Posten
+        w_items = (
+            erloes_items_idx.get(vin, []) + erloes_items_idx.get(f_key, []) +
+            work_kosten_items_idx.get(vin, []) + work_kosten_items_idx.get(f_key, [])
+        )
+        
+        # Gesamtkosten-Basis für den DB
+        total_wk_kosten = purchase_expenses + w_kosten_intern
+
+        if is_diff_tax:
+            marge_brutto = vk_brutto - ek_brutto
+            steuer_anteil = (marge_brutto / 1.19) * 0.19 if marge_brutto > 0 else 0.0
+            umsatz_netto = vk_brutto - steuer_anteil
+            fahrzeug_kosten_netto = ek_brutto
+        else:
+            umsatz_netto = vk_brutto / 1.19
+            fahrzeug_kosten_netto = ek_netto
 
         vehicles.append({
             "id": v_id,
-            "vin": identifier.get("vin", ""),
+            "vin": vin,
             "hersteller": model.get("producer", "-"),
             "modell": model.get("model", "-"),
             "serie": model.get("series", ""),
             "modelljahr": model.get("modelyear", "-"),
             "typ": typ,
             "zustand": str(v.get("condition", "")).upper(),
-            "vk_brutto": vk,
-            "ek_brutto": ek,
+            "vk_brutto": vk_brutto,
+            "ek_brutto": ek_brutto,
+            "ek_netto": ek_netto,
+            "is_diff_tax": is_diff_tax,
+            "werkstatt_erloes": round(w_erloes, 2),
+            "werkstatt_details": w_items,
+            "umsatz_netto": round(umsatz_netto, 2),
+            "kosten_basis": round(fahrzeug_kosten_netto, 2),
             "laenge_m": f"{laenge_cm / 100:.2f}" if laenge_cm else "-",
             "ps": int(_safe_float(engine.get("ps"))),
             "standtage_vorschlag": standtage_default,
             "standkosten_zins": STANDKOSTEN_ZINS,
-            "werkstattkosten_vorschlag": wk_kosten,
+            "werkstattkosten_vorschlag": round(total_wk_kosten, 2),
+            "werkstatt_details": w_items
         })
 
     if not vehicle_id:
-        # Ranking-Modus
         typ_buckets: dict = {}
         for vh in vehicles:
             vk = vh["vk_brutto"]
@@ -544,7 +604,6 @@ def calculate_deckungsbeitrag(
         ranked.sort(key=lambda x: x["avg_db"], reverse=True)
         return {"ranked_results": ranked, "total_items": len(vehicles)}
 
-    # Einzelfahrzeug-Modus
     target = next((vh for vh in vehicles if str(vh["id"]) == str(vehicle_id)), None)
     if not target:
         return {"error": "Fahrzeug nicht gefunden"}
@@ -562,6 +621,16 @@ def calculate_deckungsbeitrag(
         "auto": True,
         "detail": f"{standtage:.0f} Tage bei {STANDKOSTEN_ZINS*100:.1f}% p.a.",
     })
+    
+    # NEU: Interne Werkstattkosten als Abzug inkludieren
+    wk_intern = target.get("werkstattkosten_vorschlag", 0.0)
+    if wk_intern > 0:
+        abzuege.append({
+            "label": "Werkstatt / Aufbereitung (Intern)",
+            "betrag": round(wk_intern, 2),
+            "auto": True,
+            "detail": "Kosten laut Werkstattaufträgen"
+        })
 
     for pos in positionen:
         if not pos.get("aktiv", True):
@@ -580,10 +649,16 @@ def calculate_deckungsbeitrag(
             "auto": True,
         })
 
-    total_abzuege = sum(p["betrag"] for p in abzuege) + ek
+    # Finale Berechnung basierend auf der Netto-Logik (Tax)
+    total_abzuege_nach_ek = sum(p["betrag"] for p in abzuege)
     total_zuschlaege = sum(p["betrag"] for p in zuschlaege)
-    db = vk - total_abzuege + total_zuschlaege
-    db_prozent = (db / vk * 100) if vk else 0
+    
+    # DB = Netto-Erlös (nach Steuer) - Netto-EK-Basis - alle weiteren Abzüge + Zuschläge
+    umsatz_netto = target["umsatz_netto"]
+    ek_kosten_basis = target["kosten_basis"]
+    
+    db = umsatz_netto - ek_kosten_basis - total_abzuege_nach_ek + total_zuschlaege
+    db_prozent = (db / umsatz_netto * 100) if umsatz_netto > 0 else 0
 
     return {
         "vehicle": target,

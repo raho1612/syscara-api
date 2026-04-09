@@ -30,7 +30,7 @@ def _read_api_version() -> str:
     except Exception:
         pass
         
-    return "Modular-v2 vom 09.04.2026 (10:30 Uhr)"  # Sicherer Fallback
+    return "Modular-v3 vom 09.04.2026 (15:45 Uhr)"  # Sicherer Fallback BELS + Tax Fix
 
 
 # Initialisierung
