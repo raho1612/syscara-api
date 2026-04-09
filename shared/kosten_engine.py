@@ -557,10 +557,12 @@ def calculate_deckungsbeitrag(
     if not vehicle_id:
         typ_buckets: dict = {}
         for vh in vehicles:
-            vk = vh["vk_brutto"]
-            ek = vh["ek_brutto"]
+            # DB = Netto-Erlös - Kosten-Basis - Werkstattkosten - Standkosten - Sonstige (laut Settings)
+            # Dabei ist vh['umsatz_netto'] bereits nach Steuer (§25a oder Regel)
+            
+            ek_brutto = vh["ek_brutto"]
             standtage = vh["standtage_vorschlag"]
-            standkosten = ek * (STANDKOSTEN_ZINS / 365.0) * standtage if ek > 0 else 0.0
+            standkosten = ek_brutto * (STANDKOSTEN_ZINS / 365.0) * standtage if ek_brutto > 0 else 0.0
 
             extra = (
                 float(settings.get("batterie", 0))
@@ -574,10 +576,14 @@ def calculate_deckungsbeitrag(
             )
             annahme = float(settings.get("annahme", 200))
             transport = float(settings.get("transport", 0))
-            rabatt_ek = ek * float(settings.get("rabatt_ek_prozent", 0)) / 100.0
-
-            gesamtkosten = ek + standkosten + extra + finanz + annahme + transport - rabatt_ek
-            db = vk - gesamtkosten
+            
+            # DB Berechnung mit Einbezug der Werkstatt-Erlöse und -Kosten
+            # Wir nehmen umsatz_netto (bereits versteuerter VK) + Zusatzumsatz aus BELS (netto geschätzt)
+            erloes_bels_netto = vh.get("werkstatt_erloes", 0) / 1.19
+            db = (vh["umsatz_netto"] + erloes_bels_netto) - vh["kosten_basis"] - vh["werkstattkosten_vorschlag"] - standkosten - extra - finanz - annahme - transport
+            
+            vk = vh["vk_brutto"]
+            ek = ek_brutto
 
             t = vh["typ"]
             if t not in typ_buckets:
@@ -659,15 +665,18 @@ def calculate_deckungsbeitrag(
         })
 
     # Finale Berechnung basierend auf der Netto-Logik (Tax)
-    total_abzuege_nach_ek = sum(p["betrag"] for p in abzuege)
+    total_abzuege = sum(p["betrag"] for p in abzuege)
     total_zuschlaege = sum(p["betrag"] for p in zuschlaege)
     
     # DB = Netto-Erlös (nach Steuer) - Netto-EK-Basis - alle weiteren Abzüge + Zuschläge
-    umsatz_netto = target["umsatz_netto"]
+    # Wir addieren den Werkstatt-Zusatzumsatz (BELS) hinzu
+    umsatz_netto_fz = target["umsatz_netto"]
+    erloes_bels_netto = target.get("werkstatt_erloes", 0) / 1.19
     ek_kosten_basis = target["kosten_basis"]
     
-    db = umsatz_netto - ek_kosten_basis - total_abzuege_nach_ek + total_zuschlaege
-    db_prozent = (db / umsatz_netto * 100) if umsatz_netto > 0 else 0
+    total_umsatz_netto = umsatz_netto_fz + erloes_bels_netto
+    db = total_umsatz_netto - ek_kosten_basis - total_abzuege + total_zuschlaege
+    db_prozent = (db / total_umsatz_netto * 100) if total_umsatz_netto > 0 else 0
 
     return {
         "vehicle": target,
