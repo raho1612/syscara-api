@@ -11,14 +11,16 @@ from core.database import _qcache_get, _qcache_put, get_cached_or_fetch
 from flask import jsonify, request, session
 from services.bi_service import (
     _build_bi_context,
-    _detect_customer_query,
-    _detect_employee_query,
-    _detect_order_lookup_query,
-    _execute_local_customer_query,
-    _execute_local_employee_query,
-    _execute_local_order_lookup,
     _get_orders,
-    map_and_filter,
+)
+from services.vehicle_service import map_and_filter
+from services.ai_tool_service import (
+    detect_customer_query,
+    execute_local_customer_query,
+    detect_order_lookup_query,
+    execute_local_order_lookup,
+    detect_employee_query,
+    execute_local_employee_query,
 )
 from shared.vehicle_stats import build_vehicle_identity_key, classify_sale_kpi_bucket
 
@@ -167,70 +169,48 @@ def _filter_orders_by_date(order: dict, filters: dict) -> bool:
 
 
 def _query_sales_history(args: dict) -> str:
-    """Query historical sales with deduplication and vehicle matching."""
+    """Query historical sales using the centralized sales engine."""
     try:
+        from shared.sales_engine import calculate_net_sales
         f = {
             "jahr_min": int(args.get("jahrMin") or 0) or None,
             "jahr_max": int(args.get("jahrMax") or 0) or None,
             "monat_min": int(args.get("monatMin") or 0) or None,
             "monat_max": int(args.get("monatMax") or 0) or None,
         }
-        vehicle_index = _build_sales_vehicle_index()
         raw_orders = _get_orders()
 
-        matched: dict[str, dict] = {}
-        unmatched_orders = 0
-
-        for order in raw_orders:
-            if not _filter_orders_by_date(order, f):
-                continue
-
-            match = None
-            for join_key in _extract_order_join_keys(order):
-                match = vehicle_index.get(join_key)
-                if not match:
-                    match = vehicle_index.get(join_key.upper())
-                if match:
-                    break
-
-            if not match:
-                unmatched_orders += 1
-                continue
-
-            stable_key, vehicle = match
-            if not _vehicle_matches_sales_filters(vehicle, args):
-                continue
-
-            order_date = _extract_order_date_prefix(order)
-            existing = matched.get(stable_key)
-            if not existing or order_date > existing["verkauf_datum"]:
-                mod = vehicle.get("model") or {}
-                if isinstance(mod, list):
-                    mod = mod[0] if mod else {}
-                matched[stable_key] = {
-                    "verkauf_datum": order_date,
-                    "hersteller": str(mod.get("producer") or "-").strip() or "-",
-                    "modell": str(mod.get("model") or "-").strip() or "-",
-                    "status": str(vehicle.get("status") or ""),
-                }
-
-        results = sorted(
-            matched.values(), key=lambda x: x["verkauf_datum"], reverse=True
+        net_stats = calculate_net_sales(
+            raw_orders,
+            year_min=f["jahr_min"],
+            year_max=f["jahr_max"],
+            month_min=f["monat_min"],
+            month_max=f["monat_max"]
         )
+
         response = {
-            "treffer_anzahl": len(results),
-            "kontext": "Historische Verkäufe (eindeutige Fahrzeuge)",
+            "treffer_anzahl": net_stats["netto_verkauft"],
+            "umsatz": net_stats["netto_umsatz"],
+            "kontext": "Historische Verkäufe (eindeutige Fahrzeuge, dedup + storno geprüft)",
             "jahr_von": f["jahr_min"],
             "jahr_bis": f["jahr_max"],
             "monat_von": f["monat_min"],
             "monat_bis": f["monat_max"],
-            "ungepairte_auftraege": unmatched_orders,
             "status": "Erfolg",
         }
-        if len(results) <= 20:
-            response["beispiele"] = results
+        examples = []
+        for v in net_stats["fahrzeuge"][:20]:
+            examples.append({
+                "verkauf_datum": v["datum_ab"],
+                "hersteller": "-",
+                "modell": v["fahrzeug_key"],
+                "status": v["status_final"]
+            })
+        if examples:
+            response["beispiele"] = examples
+
         return json.dumps(response, ensure_ascii=False)
-    except (TypeError, ValueError, KeyError) as exc:
+    except Exception as exc:
         return f"Technischer Fehler im Sales-Tool: {str(exc)}"
 
 
@@ -248,6 +228,7 @@ def _get_emp_map() -> dict:
 def _query_employee_ranking(args: dict) -> str:
     """Calculates employee ranking based on sales or revenue."""
     try:
+        from shared.sales_engine import calculate_net_sales_by_employee
         f = {
             "jahr_min": int(args.get("jahrMin") or 0) or None,
             "jahr_max": int(args.get("jahrMax") or 0) or None,
@@ -255,51 +236,36 @@ def _query_employee_ranking(args: dict) -> str:
             "monat_max": int(args.get("monatMax") or 0) or None,
         }
         metric = str(args.get("metrik") or "verkaeufe").lower()
-        idx = _build_sales_vehicle_index()
         raw_rows = _get_orders()
         e_map = _get_emp_map()
 
-        e_stats = defaultdict(lambda: {"total": 0, "items": set()})
+        by_emp = calculate_net_sales_by_employee(
+            raw_rows,
+            year_min=f["jahr_min"],
+            year_max=f["jahr_max"]
+        )
 
-        for order in raw_rows:
-            if not _filter_orders_by_date(order, f):
-                continue
-            
-            match = None
-            for jk in _extract_order_join_keys(order):
-                match = idx.get(jk) or idx.get(jk.upper())
-                if match:
-                    break
-            if not match:
-                continue
+        e_stats = []
+        for emp_id, stats in by_emp.items():
+            if emp_id == "UNBEKANNT": continue
+            name = e_map.get(emp_id) or emp_id
+            if metric == "umsatz":
+                val = stats["netto_umsatz"]
+            else:
+                val = stats["netto_verkauft"]
+            e_stats.append({"name": name, "wert": val})
 
-            s_key, vehicle = match
-            eid = _extract_employee_from_order(order)
-            if not eid:
-                continue
-                
-            name = e_map.get(eid) or eid
-            if s_key not in e_stats[name]["items"]:
-                e_stats[name]["items"].add(s_key)
-                if metric == "umsatz":
-                    p = vehicle.get("prices") or {}
-                    if isinstance(p, list):
-                        p = p[0] if p else {}
-                    e_stats[name]["total"] += float(p.get("offer") or 0)
-                else:
-                    e_stats[name]["total"] += 1
-
-        top = sorted(e_stats.items(), key=lambda x: x[1]["total"], reverse=True)
+        top = sorted(e_stats, key=lambda x: x["wert"], reverse=True)
         res = {
             "ranking": [
-                {"name": n, "wert": round(v["total"], 2)}
-                for n, v in top[:10]
+                {"name": x["name"], "wert": round(x["wert"], 2)}
+                for x in top[:10]
             ],
             "metrik": metric,
             "status": "Erfolg",
         }
         return json.dumps(res, ensure_ascii=False)
-    except (TypeError, ValueError, KeyError) as e:
+    except Exception as e:
         return f"Fehler im Ranking-Tool: {str(e)}"
 
 
@@ -504,21 +470,28 @@ def _execute_ai_tool(name: str, arguments: str) -> str:
 
 def _handle_local_detections(question: str):
     """Try to answer the question using deterministic local lookups."""
-    # DSGVO-Bereich
-    is_cust, cp = _detect_customer_query(question)
+    try:
+        raw_orders = _get_orders()
+    except Exception:
+        raw_orders = []
+
+    # DSGVO-Bereich (Kunden)
+    is_cust, cp = detect_customer_query(question)
     if is_cust:
-        a, t = _execute_local_customer_query(cp)
+        a, t = execute_local_customer_query(cp, raw_orders)
         return {"success": True, "answer": a, "table": t}
 
-    is_ord, op = _detect_order_lookup_query(question)
+    # Auftragsnummern
+    is_ord, op = detect_order_lookup_query(question)
     if is_ord:
-        a, t, c = _execute_local_order_lookup(op)
-        return {"success": True, "answer": a, "chart": c, "table": t}
+        a, t = execute_local_order_lookup(op, raw_orders)
+        return {"success": True, "answer": a, "chart": None, "table": t}
 
-    is_emp, ep = _detect_employee_query(question)
+    # Mitarbeiter
+    is_emp, ep = detect_employee_query(question)
     if is_emp:
-        a, t, c = _execute_local_employee_query(ep)
-        return {"success": True, "answer": a, "chart": c, "table": t}
+        a, t = execute_local_employee_query(ep, raw_orders)
+        return {"success": True, "answer": a, "chart": None, "table": t}
 
     sales_payload = _detect_simple_sales_count_query(question)
     if sales_payload:

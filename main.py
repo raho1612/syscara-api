@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from api.ai_analyst import register_ai_analyst_routes
 from api.evaluation import register_evaluation_routes
@@ -10,6 +11,27 @@ from core.database import supabase
 from flask import Flask, jsonify
 from flask_cors import CORS
 from services.sync_service import register_sync_routes, start_sync_thread
+
+
+def _read_api_version() -> str:
+    # 1. Docker/Prodn-Pfad
+    try:
+        v = Path("/app/api_version.txt").read_text().strip()
+        if v:
+            return v
+    except Exception:
+        pass
+    
+    # 2. Lokaler Pfad (Entwicklung)
+    try:
+        v = Path(CURRENT_DIR / "VERSION").read_text().strip()
+        if v:
+            return v
+    except Exception:
+        pass
+        
+    return "Modular-v2 vom 09.04.2026 (10:30 Uhr)"  # Sicherer Fallback
+
 
 # Initialisierung
 app = Flask(__name__)
@@ -61,7 +83,7 @@ def api_diag():
         {
             "success": True,
             "modular": True,
-            "api_version": os.getenv("SYSCARA_API_VERSION", "v2.0.0-modular"),
+            "api_version": _read_api_version(),
             "employee_names_exists": len(emp_names) > 0,
             "employee_names_count": len(emp_names),
             "has_openai_lib": has_openai,

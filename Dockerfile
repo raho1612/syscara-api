@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App-Code kopieren (ohne Cache-Dateien)
 COPY main.py .
 COPY employee_names.json .
+COPY VERSION .
 COPY api ./api
 COPY core ./core
 COPY services ./services

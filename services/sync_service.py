@@ -12,11 +12,16 @@ def sync_all_now():
         "sale/orders":    f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01",
         "sale/lists":     f"{SYSCARA_BASE}/sale/lists/?list=pictures",
         "sale/vehicles":  f"{SYSCARA_BASE}/sale/vehicles/",
-        "sale/ads":       f"{SYSCARA_BASE}/sale/ads/"
+        "sale/ads":       f"{SYSCARA_BASE}/sale/ads/",
+        "work/orders":    f"{SYSCARA_BASE}/work/orders/?update=2025-01-01",
     }
     for name, url in endpoints.items():
         try:
+            # MEM_CACHE-Eintrag zuerst entfernen, damit get_cached_or_fetch
+            # echte Daten von Syscara holt (nicht den alten In-Memory-Stand).
+            _MEM_CACHE.pop(name, None)
             get_cached_or_fetch(name, url)
+            print(f"[SYNC] {name} OK", flush=True)
         except Exception as e:
             print(f"[SYNC ERROR] {name}: {e}", flush=True)
     print("--- [BACKGROUND SYNC] Fertig ---\n", flush=True)
