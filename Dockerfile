@@ -14,6 +14,7 @@ COPY api ./api
 COPY core ./core
 COPY services ./services
 COPY shared ./shared
+RUN date -u '+%Y%m%d-%H%M' > /app/api_version.txt
 
 ENV PORT=5000
 EXPOSE 5000
