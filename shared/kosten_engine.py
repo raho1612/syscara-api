@@ -305,8 +305,15 @@ def get_kosten_fahrzeuge(
         if isinstance(identifier, list): identifier = identifier[0] if identifier else {}
 
         vk = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
-        ek = _safe_float(prices.get("purchase"))
+        ek_netto = _safe_float(prices.get("purchase"))
+        ek_brutto = _safe_float(prices.get("purchase_gross")) or ek_netto
         
+        is_diff_tax = False
+        if ek_brutto > 0 and abs(ek_brutto - ek_netto) < 0.01:
+            is_diff_tax = True
+            
+        ek = ek_brutto if is_diff_tax else ek_netto
+
         v_vin = identifier.get("vin", "")
         if vk <= 0 and v_vin != "WF0EXXTTRENY28111":
             continue
@@ -373,7 +380,9 @@ def get_kosten_fahrzeuge(
             "zustand": str(v.get("condition", "")).upper(),
             "vk_brutto": vk_final,
             "vk_quelle": "auftrag" if vk_order > 0 else "fahrzeug",
-            "ek_brutto": ek,
+            "ek_brutto": ek_brutto,
+            "ek_netto": ek_netto,
+            "is_diff_tax": is_diff_tax,
             "laenge_m": f"{laenge_cm / 100:.2f}" if laenge_cm else "-",
             "ps": int(_safe_float(engine.get("ps"))),
             "standtage_vorschlag": standtage_default,
