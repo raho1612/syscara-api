@@ -226,6 +226,11 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
             continue
 
         wo_cat = str(wo.get("category") or "").upper()
+        wo_id = str(wo.get("id") or "")
+        _wo_date_obj = wo.get("date") or {}
+        if isinstance(_wo_date_obj, list):
+            _wo_date_obj = _wo_date_obj[0] if _wo_date_obj else {}
+        wo_date = str(_wo_date_obj.get("customer") or _wo_date_obj.get("order") or "")[:10]
         equipment = wo.get("equipment") or []
         if isinstance(equipment, dict):
             equipment = list(equipment.values())
@@ -274,9 +279,15 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
                     typ = "kunde"
 
             if erloes <= 0 and aufwand <= 0:
-                continue
+                # INTERN/WARRANTY-Positionen mit Preis=0 als Kosten-Platzhalter behalten:
+                # Diese stellen echte Arbeiten dar (z.B. Nacharbeiten, Reklamationen),
+                # deren Kosten händisch in der DB-Rechnung eingetragen werden müssen.
+                if typ not in ("intern", "garantie") or not item_name:
+                    continue
 
             entry = {
+                "wo_id": wo_id,
+                "wo_date": wo_date,
                 "name": item_name,
                 "erloes": round(erloes, 2),
                 "aufwand": round(aufwand, 2),
@@ -323,27 +334,28 @@ def register_kosten_routes(app):
         work_orders = _load_work_orders()
         work_kosten_idx, work_erloes_idx, work_details_idx = _build_work_index(work_orders)
 
-        # --- DELIVERY-Index: Auslieferungs-WOs mit Liefertermin in der Vergangenheit ---
-        # Geschäftsregel: Wenn ein DELIVERY-Auftrag existiert und dessen
-        # date.customer ("Aktueller Liefertermin") vor heute liegt, wurde das
-        # Fahrzeug übergeben — auch wenn vehicle.date.customer noch nicht gepflegt ist.
+        # --- Übergabe-Index: WOs mit Liefertermin in der Vergangenheit ---
+        # Geschäftsregel: DELIVERY-WOs sind das primäre Signal. Syscara kategorisiert
+        # Übergabe-WOs aber manchmal als SERVICE (Fehleingabe) — deshalb beide Kategorien
+        # akzeptieren. Nur date.customer-Datum zählt (= "Aktueller Liefertermin").
         from datetime import date as _date
         today_str = _date.today().isoformat()
         vehicle_delivery_date: dict = {}  # join_key → delivery_date (YYYY-MM-DD)
         for wo in work_orders:
-            if str(wo.get("category") or "").upper() != "DELIVERY":
+            _wo_cat_d = str(wo.get("category") or "").upper()
+            if _wo_cat_d not in ("DELIVERY", "SERVICE"):
                 continue
-            wo_date = wo.get("date") or {}
-            if isinstance(wo_date, list):
-                wo_date = wo_date[0] if wo_date else {}
-            delivery_dt = str(wo_date.get("customer") or "")[:10]
+            _wo_d = wo.get("date") or {}
+            if isinstance(_wo_d, list):
+                _wo_d = _wo_d[0] if _wo_d else {}
+            delivery_dt = str(_wo_d.get("customer") or "")[:10]
             if not _is_real_date(delivery_dt):
                 continue
             if delivery_dt > today_str:
                 continue  # Liefertermin liegt noch in der Zukunft → noch nicht übergeben
-            join_keys = _work_join_keys(wo)
-            for jk in join_keys:
-                # Neuestes DELIVERY-Datum gewinnt
+            _jk_d = _work_join_keys(wo)
+            for jk in _jk_d:
+                # Neuestes Datum gewinnt
                 if jk not in vehicle_delivery_date or delivery_dt > vehicle_delivery_date[jk]:
                     vehicle_delivery_date[jk] = delivery_dt
 
@@ -459,12 +471,20 @@ def register_kosten_routes(app):
             if isinstance(identifier, list): identifier = identifier[0] if identifier else {}
 
             vk = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
-            ek = _safe_float(prices.get("purchase"))
+            ek_netto = _safe_float(prices.get("purchase"))
+            ek_gross = _safe_float(prices.get("purchase_gross")) or ek_netto
+            # Differenzbesteuerung: Privatkauf → Brutto = Netto (keine MwSt. abzugsfähig)
+            is_diff_tax = ek_gross > 0 and abs(ek_gross - ek_netto) < 0.01
+            ek = ek_gross if is_diff_tax else ek_netto
             if vk <= 0:
                 continue
 
             v_id = str(v.get("id") or v.get("uid") or "")
             join_keys = _vehicle_join_keys(v)
+            uebergabe_datum = next(
+                (vehicle_delivery_date[jk] for jk in join_keys if jk in vehicle_delivery_date),
+                "",
+            )
             sale_date = next(
                 (
                     vehicle_sale_date[key]
@@ -594,6 +614,8 @@ def register_kosten_routes(app):
                     "vk_brutto": vk_final,
                     "vk_quelle": "auftrag" if vk_order > 0 else "fahrzeug",
                     "ek_brutto": ek,
+                    "ek_netto": ek_netto,
+                    "is_diff_tax": is_diff_tax,
                     "laenge_m": f"{laenge_cm / 100:.2f}" if laenge_cm else "-",
                     "ps": int(_safe_float(engine.get("ps"))),
                     "standtage_vorschlag": standtage_default,
@@ -607,6 +629,7 @@ def register_kosten_routes(app):
                     "verkaeufer": verkaeufer,
                     "einstandsdatum": einstandsdatum,
                     "rechnungsdatum": rechnungsdatum,
+                    "uebergabe_datum": uebergabe_datum,
                     "_db_quick": db_pct_quick,
                 }
             )
