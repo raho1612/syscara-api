@@ -189,24 +189,30 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
                                                {name, erloes, aufwand, typ}
 
     Regeln:
-      DELIVERY-Aufträge: equipment-Items mit category='Werk' (Fahrzeugpreis selbst)
-        werden übersprungen; alle anderen Items → eprice als aufwand.
-      SERVICE/REPAIR-Aufträge (nachträgliche Arbeiten):
-        billing INTERNAL  → eprice → aufwand (interne Kosten, kein Erlös)
+      Alle Auftragstypen: category='Werk' und category='Dokumente' werden
+        übersprungen (Fahrzeugpreis bzw. Dokumente, keine echten Werkstattkosten).
+      DELIVERY-Aufträge: alle übrigen Items → eprice als aufwand.
+      SERVICE/REPAIR/PARTS/INTERN-Aufträge (nachträgliche Arbeiten):
+        billing INTERN    → eprice → aufwand (interne Kosten, kein Erlös)
         billing WARRANTY  → eprice → aufwand (Garantiekosten, kein Erlös)
         billing CUSTOMER  → price → erloes UND eprice → aufwand
                             (Kunde zahlt, aber wir haben auch Kosten dafür)
+
+    Hinweis: Syscara liefert billing als 'INTERN' (nicht 'INTERNAL').
     """
     kosten_idx: dict = {}
     erloes_idx: dict = {}
     details_idx: dict = {}
+
+    # Item-Kategorien die immer übersprungen werden (kein echter Werkstattaufwand)
+    SKIP_ITEM_CATS = {"werk", "dokumente"}
 
     for wo in work_orders:
         join_keys = _work_join_keys(wo)
         if not join_keys:
             continue
 
-        category = str(wo.get("category") or "").upper()
+        wo_cat = str(wo.get("category") or "").upper()
         equipment = wo.get("equipment") or []
         if isinstance(equipment, dict):
             equipment = list(equipment.values())
@@ -220,17 +226,19 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
             price = _safe_float(item.get("price"))
             item_name = str(item.get("name") or item.get("code") or item_cat or "Position").strip()
 
+            # Fahrzeugpreis und Dokumente überspringen (in allen Auftragstypen)
+            if item_cat in SKIP_ITEM_CATS:
+                continue
+
             erloes = 0.0
             aufwand = 0.0
             typ = ""
 
-            if category == "DELIVERY":
-                if item_cat == "werk":
-                    continue
+            if wo_cat == "DELIVERY":
                 aufwand = eprice if eprice > 0 else price
                 typ = "delivery"
             else:
-                if billing == "INTERNAL":
+                if billing == "INTERN":
                     aufwand = eprice if eprice > 0 else 0.0
                     typ = "intern"
                 elif billing == "WARRANTY":
