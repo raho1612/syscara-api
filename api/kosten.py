@@ -73,16 +73,17 @@ def _is_real_date(val: str) -> bool:
 def _extract_order_date(order: dict) -> str:
     """Gibt das Datum eines Auftrags als 'YYYY-MM-DD'-String zurück, oder ''.
 
-    Für den Kosten-Tab ist das Auslieferungsdatum (date.delivery) relevant,
-    nicht das Auftragserstellungsdatum (date.created). Ein Fahrzeug, das 2024
-    bestellt aber erst 2026 ausgeliefert wurde, soll im April 2026 erscheinen.
-    Priorität: delivery → invoice → created → updated.
+    Für den Kosten-Tab ist das Auslieferungsdatum (date.customer) relevant,
+    nicht das Auftragserstellungsdatum. Ein Fahrzeug, das 2024 bestellt aber
+    erst 2026 ausgeliefert wurde, soll im April 2026 erscheinen.
+    Priorität: customer → order → invoice → delivery → create → update.
     Achtung: date.delivery kann 'INCOMING_DATE' (Platzhalter) enthalten → wird verworfen.
+    Hinweis: Syscara liefert 'create'/'update' (ohne 'd'), nicht 'created'/'updated'.
     """
     # Primär: verschachteltes date-Objekt (Syscara: order.date.*)
     date_obj = order.get("date")
     if isinstance(date_obj, dict):
-        for sub_key in ("delivery", "invoice", "created", "updated"):
+        for sub_key in ("customer", "order", "invoice", "delivery", "create", "update", "created", "updated"):
             val = date_obj.get(sub_key)
             if val and isinstance(val, str) and _is_real_date(val):
                 return val[:10]
@@ -95,17 +96,29 @@ def _extract_order_date(order: dict) -> str:
 
 
 def _load_orders() -> list:
+    """Lädt Verkaufsaufträge und filtert reine Angebote (OFFER) heraus.
+
+    Geschäftsregel: status=OFFER bedeutet nur ein Angebot wurde erstellt,
+    kein Kaufvertrag wurde unterschrieben, keine Auftragsbestätigung rausgegangen.
+    Solche Orders dürfen nicht als Verkauf gewertet werden — weder für Kundendaten
+    noch für Datum-Zuordnung noch für VK-Preis.
+    Nur ORDER, RE und ähnliche Status sind echte Verkäufe.
+    """
     # sale/orders = Standard Bulk-Sync (ab 2024) - identisch mit sync_service
     orders_raw = get_cached_or_fetch(
         "sale/orders", f"{SYSCARA_BASE}/sale/orders/?update=2024-01-01"
     )
     if isinstance(orders_raw, dict) and "orders" in orders_raw:
-        return orders_raw["orders"]
-    if isinstance(orders_raw, list):
-        return orders_raw
-    if hasattr(orders_raw, "values"):
-        return [o for o in orders_raw.values() if isinstance(o, dict)]
-    return []
+        all_orders = orders_raw["orders"]
+    elif isinstance(orders_raw, list):
+        all_orders = orders_raw
+    elif hasattr(orders_raw, "values"):
+        all_orders = [o for o in orders_raw.values() if isinstance(o, dict)]
+    else:
+        all_orders = []
+
+    # OFFER herausfiltern — kein echter Kaufvertrag
+    return [o for o in all_orders if str(o.get("status") or "").upper() != "OFFER"]
 
 
 def _load_employee_names() -> dict:
@@ -301,6 +314,30 @@ def register_kosten_routes(app):
         work_orders = _load_work_orders()
         work_kosten_idx, work_erloes_idx, work_details_idx = _build_work_index(work_orders)
 
+        # --- DELIVERY-Index: Auslieferungs-WOs mit Liefertermin in der Vergangenheit ---
+        # Geschäftsregel: Wenn ein DELIVERY-Auftrag existiert und dessen
+        # date.customer ("Aktueller Liefertermin") vor heute liegt, wurde das
+        # Fahrzeug übergeben — auch wenn vehicle.date.customer noch nicht gepflegt ist.
+        from datetime import date as _date
+        today_str = _date.today().isoformat()
+        vehicle_delivery_date: dict = {}  # join_key → delivery_date (YYYY-MM-DD)
+        for wo in work_orders:
+            if str(wo.get("category") or "").upper() != "DELIVERY":
+                continue
+            wo_date = wo.get("date") or {}
+            if isinstance(wo_date, list):
+                wo_date = wo_date[0] if wo_date else {}
+            delivery_dt = str(wo_date.get("customer") or "")[:10]
+            if not _is_real_date(delivery_dt):
+                continue
+            if delivery_dt > today_str:
+                continue  # Liefertermin liegt noch in der Zukunft → noch nicht übergeben
+            join_keys = _work_join_keys(wo)
+            for jk in join_keys:
+                # Neuestes DELIVERY-Datum gewinnt
+                if jk not in vehicle_delivery_date or delivery_dt > vehicle_delivery_date[jk]:
+                    vehicle_delivery_date[jk] = delivery_dt
+
         # --- Datum-Index, Kundendaten, VK aus Order, Verkäufer ---
         vehicle_sale_date: dict = {}
         vehicle_customer_info: dict = {}
@@ -381,17 +418,26 @@ def register_kosten_routes(app):
                 continue
 
             status = str(v.get("status", "")).upper()
-            # RE = Rechnung (formale Verkaufsrechnung)
-            # BE = Bestellt/übergeben – zugelassen wenn date.customer gesetzt
-            #      (explizit freigegeben: Fahrzeug ausgeliefert, Rechnung noch ausstehend)
+            # RE = Rechnung vorhanden → sicherer Verkaufsbeleg
+            # BE = Bestellt/übergeben → zulassen wenn eines dieser Signale vorliegt:
+            #   1. vehicle.date.customer gesetzt (Übergabedatum direkt am Fahrzeug)
+            #   2. DELIVERY-Werkstattauftrag mit date.customer in der Vergangenheit
+            #      (Geschäftsregel: Auslieferungs-WO = Fahrzeug wurde übergeben,
+            #       auch wenn Syscara-Fahrzeugdaten noch nicht nachgepflegt wurden)
             if status not in ("RE", "BE"):
                 continue
             if status == "BE":
                 _v_date_be = v.get("date") or {}
                 if isinstance(_v_date_be, list):
                     _v_date_be = _v_date_be[0] if _v_date_be else {}
-                if not _is_real_date(str(_v_date_be.get("customer") or "")):
-                    continue
+                _has_vehicle_customer_date = _is_real_date(str(_v_date_be.get("customer") or ""))
+
+                if not _has_vehicle_customer_date:
+                    # Fallback: DELIVERY-WO mit vergangenem Liefertermin?
+                    _v_tmp_keys = _vehicle_join_keys(v)
+                    _has_delivery_wo = any(jk in vehicle_delivery_date for jk in _v_tmp_keys)
+                    if not _has_delivery_wo:
+                        continue
 
             model = v.get("model", {}) or {}
             prices = v.get("prices", {}) or {}
@@ -429,18 +475,27 @@ def register_kosten_routes(app):
             kundendatum = str(v_date.get("customer") or "")  # Auslieferungsdatum an Kunden
 
             # Fallback-Kette für sale_date (Anzeige + Datumsfilter):
-            # 1. Auftragsdatum aus Orders-Cache
+            # 1. Auftragsdatum aus Orders-Cache (customer/order/invoice-Datum)
             # 2. Rechnungsdatum am Fahrzeug
-            # 3. Kundendatum (Auslieferung) – wichtig für status=BE
+            # 3. Kundendatum (Auslieferung) am Fahrzeug – wichtig für status=BE
+            # 4. DELIVERY-WO-Datum (Aktueller Liefertermin aus Werkstattauftrag)
             if not sale_date and rechnungsdatum and _is_real_date(rechnungsdatum):
                 sale_date = rechnungsdatum
             if not sale_date and kundendatum and _is_real_date(kundendatum):
                 sale_date = kundendatum
+            if not sale_date:
+                delivery_wo_date = next(
+                    (vehicle_delivery_date[jk] for jk in join_keys if jk in vehicle_delivery_date),
+                    "",
+                )
+                if delivery_wo_date:
+                    sale_date = delivery_wo_date
 
             # Datumsfilter
             # Primär: Auftragsdatum aus Orders-Cache (vehicle_sale_date).
             # Fallback 1: vehicle.date.invoice
-            # Fallback 2: vehicle.date.customer (Auslieferungsdatum, wichtig für BE)
+            # Fallback 2: vehicle.date.customer
+            # Fallback 3: DELIVERY-WO date.customer (Aktueller Liefertermin)
             if vehicles_in_range is not None and not any(
                 key in vehicles_in_range for key in join_keys
             ):
@@ -449,6 +504,11 @@ def register_kosten_routes(app):
                     fallback_date = rechnungsdatum
                 elif _is_real_date(kundendatum):
                     fallback_date = kundendatum
+                else:
+                    fallback_date = next(
+                        (vehicle_delivery_date[jk] for jk in join_keys if jk in vehicle_delivery_date),
+                        "",
+                    )
                 if fallback_date:
                     ym_fb = fallback_date[:7]
                     in_range = True

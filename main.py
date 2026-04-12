@@ -14,23 +14,11 @@ from services.sync_service import register_sync_routes, start_sync_thread
 
 
 def _read_api_version() -> str:
-    # 1. Docker/Prodn-Pfad
     try:
         v = Path("/app/api_version.txt").read_text().strip()
-        if v:
-            return v
+        return v if v else "unknown"
     except Exception:
-        pass
-    
-    # 2. Lokaler Pfad (Entwicklung)
-    try:
-        v = Path(CURRENT_DIR / "VERSION").read_text().strip()
-        if v:
-            return v
-    except Exception:
-        pass
-        
-    return "Modular-v3 vom 09.04.2026 (15:45 Uhr)"  # Sicherer Fallback BELS + Tax Fix
+        return "unknown"
 
 
 # Initialisierung
