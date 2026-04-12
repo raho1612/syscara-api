@@ -248,8 +248,17 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
             typ = ""
 
             if wo_cat == "DELIVERY":
-                aufwand = eprice if eprice > 0 else price
-                typ = "delivery"
+                if billing == "CUSTOMER":
+                    # Kunde bezahlt Zusatzleistungen bei Auslieferung (Zubehör, Einbau etc.)
+                    # Identisch zu SERVICE/CUSTOMER: price = Erlös, eprice = Aufwand.
+                    # Beispiel: Dachlüfter 990€, Lithium-Batterie 950€ → Erlös UND Aufwand
+                    erloes = price if price > 0 else 0.0
+                    aufwand = eprice if eprice > 0 else 0.0
+                    typ = "kunde"
+                else:
+                    # Interne Auslieferungskosten (INTERN/WARRANTY) → nur Aufwand
+                    aufwand = eprice if eprice > 0 else price
+                    typ = "delivery"
             else:
                 if billing == "INTERN":
                     aufwand = eprice if eprice > 0 else 0.0
