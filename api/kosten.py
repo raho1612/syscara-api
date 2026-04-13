@@ -288,6 +288,7 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
             entry = {
                 "wo_id": wo_id,
                 "wo_date": wo_date,
+                "wo_cat": wo_cat.lower(),
                 "name": item_name,
                 "erloes": round(erloes, 2),
                 "aufwand": round(aufwand, 2),
