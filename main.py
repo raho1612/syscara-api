@@ -4,6 +4,7 @@ from pathlib import Path
 from api.ai_analyst import register_ai_analyst_routes
 from api.evaluation import register_evaluation_routes
 from api.kosten import register_kosten_routes
+from api.kosten_user_data import register_kosten_user_data_routes
 from api.performance import register_performance_routes
 from api.vehicles import register_vehicle_routes
 from core.config import CURRENT_DIR, ROOT_DIR
@@ -32,6 +33,7 @@ register_performance_routes(app)
 register_vehicle_routes(app)
 register_evaluation_routes(app)
 register_kosten_routes(app)
+register_kosten_user_data_routes(app)
 register_sync_routes(app)
 
 
