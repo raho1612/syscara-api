@@ -43,19 +43,17 @@ def register_evaluation_routes(app):
         # Reale Modelle mit Fallback-Reihenfolge (neueste zuerst)
         if req_model == 'haiku':
             candidates = [
+                "claude-haiku-4-5-20251001",
                 "claude-3-5-haiku-latest",
                 "claude-3-5-haiku-20241022",
-                "claude-3-haiku-20240307"
             ]
         else:
             candidates = [
+                "claude-sonnet-4-6",
                 "claude-3-7-sonnet-latest",
                 "claude-3-7-sonnet-20250219",
                 "claude-3-5-sonnet-latest",
                 "claude-3-5-sonnet-20241022",
-                "claude-3-5-sonnet-20240620",  # Ursprüngliche 3.5 Sonnet
-                "claude-3-sonnet-20240229",    # Claude 3.0 Sonnet
-                "claude-3-opus-20240229"       # Claude 3.0 Opus (Fallback)
             ]
 
         import anthropic
@@ -77,7 +75,8 @@ def register_evaluation_routes(app):
                 })
             except Exception as e:
                 last_error = str(e)
-                # Fallback bei NotFound / BadRequest / 404
+                if "credit balance" in last_error.lower() or "too low" in last_error.lower():
+                    return jsonify({"success": False, "error": "Anthropic-Guthaben aufgebraucht. Bitte Credits aufladen."}), 503
                 err_type = type(e).__name__
                 if err_type in ["NotFoundError", "BadRequestError"] or "not found" in last_error.lower() or "not_found" in last_error.lower() or "404" in last_error or "400" in last_error:
                     continue

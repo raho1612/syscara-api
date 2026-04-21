@@ -7,6 +7,7 @@ from api.kosten import register_kosten_routes
 from api.kosten_user_data import register_kosten_user_data_routes
 from api.performance import register_performance_routes
 from api.vehicles import register_vehicle_routes
+from api.werkstatt_katalog import register_werkstatt_katalog_routes
 from core.config import CURRENT_DIR, ROOT_DIR
 from core.database import supabase
 from flask import Flask, jsonify
@@ -35,6 +36,7 @@ register_evaluation_routes(app)
 register_kosten_routes(app)
 register_kosten_user_data_routes(app)
 register_sync_routes(app)
+register_werkstatt_katalog_routes(app)
 
 
 @app.route("/api/health")

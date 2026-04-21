@@ -278,12 +278,12 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict]:
                     aufwand = eprice if eprice > 0 else 0.0
                     typ = "kunde"
 
-            if erloes <= 0 and aufwand <= 0:
-                # INTERN/WARRANTY-Positionen mit Preis=0 als Kosten-Platzhalter behalten:
-                # Diese stellen echte Arbeiten dar (z.B. Nacharbeiten, Reklamationen),
-                # deren Kosten händisch in der DB-Rechnung eingetragen werden müssen.
-                if typ not in ("intern", "garantie") or not item_name:
-                    continue
+            # Alle benannten Positionen behalten — auch wenn eprice=0.
+            # Begründung: Selbstkosten werden manuell über den Leistungskatalog
+            # eingetragen. Eine Position mit erloes=0 und aufwand=0 ist trotzdem
+            # ein echter Arbeitsschritt, der im Deckungsbeitrag erscheinen muss.
+            if not item_name:
+                continue
 
             entry = {
                 "wo_id": wo_id,

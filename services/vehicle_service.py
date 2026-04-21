@@ -77,7 +77,7 @@ def _apply_filters(v_data: dict, raw_v: dict, filters: dict) -> bool:
     
     # Basic Filters
     f_art = str(filters.get("art", "alle")).lower()
-    if f_art != "alle" and f_art not in v_data["art_raw"]:
+    if f_art != "alle" and f_art != v_data["art_label"].lower():
         return False
 
     f_stat = filters.get("status")
@@ -85,11 +85,11 @@ def _apply_filters(v_data: dict, raw_v: dict, filters: dict) -> bool:
         return False
 
     f_cond = filters.get("zustand")
-    if f_cond and f_cond.upper() != v_data["condition"]:
+    if f_cond and f_cond.lower() not in ("alle", "all") and f_cond.upper() != v_data["condition"]:
         return False
 
     getriebe = filters.get("getriebe")
-    if getriebe:
+    if getriebe and getriebe.lower() not in ("alle", "all"):
         if getriebe == "automatik" and not v_data["has_auto"]:
             return False
         if getriebe == "schaltung" and v_data["has_auto"]:
@@ -143,6 +143,9 @@ def map_and_filter(raw_data: Any, filters: dict) -> List[dict]:
         if not _apply_filters(f, v, filters):
             continue
 
+        media = v.get("media", []) or []
+        images = [m.get("url") for m in media if isinstance(m, dict) and m.get("group") == "image" and m.get("url")]
+
         vehicles.append({
             "id": v_id,
             "hersteller": f["producer"],
@@ -160,5 +163,7 @@ def map_and_filter(raw_data: Any, filters: dict) -> List[dict]:
             "schlafplaetze": f["schlafplaetze"],
             "has_hubbett": f["has_hubbett"],
             "has_dusche": f["has_dusche"],
+            "thumb": images[0] if images else None,
+            "media_ids": [m.get("id") for m in media if isinstance(m, dict) and m.get("group") == "image"],
         })
     return vehicles
