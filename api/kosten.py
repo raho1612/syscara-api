@@ -418,7 +418,7 @@ def register_kosten_routes(app):
         # --- Fahrzeuge in Zeitraum bestimmen ---
         if von_monat or bis_monat:
             if not vehicle_sale_date:
-                # Fallback: Wenn Orders (und damit die vehicle_sale_date Map) leer sind 
+                # Fallback: Wenn Orders (und damit die vehicle_sale_date Map) leer sind
                 # (weil z.B. Supabase Cache leer ist und Syscara Timeout liefert),
                 # deaktivieren wir den Datumsfilter vollständig, um zumindest Fahrzeuge anzuzeigen.
                 vehicles_in_range = None
@@ -602,6 +602,15 @@ def register_kosten_routes(app):
 
             db_pct_quick = (db_quick / vk_final * 100) if vk_final > 0 else 0.0
 
+            # Status-Label für Fahrzeugliste
+            if status == "RE":
+                status_label = "Verkauft"
+            elif (uebergabe_datum and uebergabe_datum <= today_str) or \
+                 (kundendatum and _is_real_date(kundendatum) and kundendatum <= today_str):
+                status_label = "Ausgeliefert"
+            else:
+                status_label = "Bestand"
+
             result.append(
                 {
                     "id": v_id,
@@ -631,6 +640,7 @@ def register_kosten_routes(app):
                     "einstandsdatum": einstandsdatum,
                     "rechnungsdatum": rechnungsdatum,
                     "uebergabe_datum": uebergabe_datum,
+                    "status": status_label,
                     "_db_quick": db_pct_quick,
                 }
             )
@@ -706,7 +716,7 @@ def register_kosten_routes(app):
             prices = v.get("prices", {}) or {}
             engine = v.get("engine", {}) or {}
             identifier = v.get("identifier", {}) or {}
-            
+
             if isinstance(model, list): model = model[0] if model else {}
             if isinstance(prices, list): prices = prices[0] if prices else {}
             if isinstance(engine, list): engine = engine[0] if engine else {}

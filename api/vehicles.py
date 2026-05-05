@@ -10,7 +10,7 @@ from core.database import (
 from core.utils import extract_order_datetime, normalize_collection_items
 from flask import jsonify, request
 from requests.auth import HTTPBasicAuth
-from services.bi_service import map_and_filter
+from services.vehicle_service import map_and_filter
 from shared.vehicle_stats import build_vehicle_stats
 
 

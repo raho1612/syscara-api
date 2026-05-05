@@ -2,26 +2,25 @@ import json
 import os
 import pathlib
 import re
-from collections import defaultdict
 from datetime import datetime
 
 import openai
 from core.config import HAS_OPENAI, SYSCARA_BASE
 from core.database import _qcache_get, _qcache_put, get_cached_or_fetch
 from flask import jsonify, request, session
+from services.ai_tool_service import (
+    detect_customer_query,
+    detect_employee_query,
+    detect_order_lookup_query,
+    execute_local_customer_query,
+    execute_local_employee_query,
+    execute_local_order_lookup,
+)
 from services.bi_service import (
     _build_bi_context,
     _get_orders,
 )
 from services.vehicle_service import map_and_filter
-from services.ai_tool_service import (
-    detect_customer_query,
-    execute_local_customer_query,
-    detect_order_lookup_query,
-    execute_local_order_lookup,
-    detect_employee_query,
-    execute_local_employee_query,
-)
 from shared.vehicle_stats import build_vehicle_identity_key, classify_sale_kpi_bucket
 
 
