@@ -6,11 +6,13 @@ Kapselt den Daten-Join zwischen Fahrzeugen, Aufträgen und Werkstattkosten.
 """
 
 from __future__ import annotations
-import os
+
 import json
+import os
 import re
-from typing import Any, Dict, List, Tuple
-from core.config import SYSCARA_BASE, CURRENT_DIR
+from typing import Any, Dict, List
+
+from core.config import CURRENT_DIR, SYSCARA_BASE
 from core.database import get_cached_or_fetch, iter_items
 
 # Typische Standtage je Fahrzeugtyp (Erfahrungswerte)
@@ -200,7 +202,7 @@ def _build_work_index(work_orders: list) -> tuple[dict, dict, dict, dict]:
                         # FIX: Falls die Position das Basisfahrzeug selbst darstellt -> Überspringen
                         if _is_vehicle_item(item_name, price):
                             continue
-                            
+
                         entry = {"name": item_name, "betrag": round(price, 2), "typ": "erloes"}
                         for jk in join_keys:
                             erloes_idx[jk] = erloes_idx.get(jk, 0.0) + price
@@ -307,11 +309,11 @@ def get_kosten_fahrzeuge(
         vk = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
         ek_netto = _safe_float(prices.get("purchase"))
         ek_brutto = _safe_float(prices.get("purchase_gross")) or ek_netto
-        
+
         is_diff_tax = False
         if ek_brutto > 0 and abs(ek_brutto - ek_netto) < 0.01:
             is_diff_tax = True
-            
+
         ek = ek_brutto if is_diff_tax else ek_netto
 
         v_vin = identifier.get("vin", "")
@@ -450,7 +452,7 @@ def calculate_deckungsbeitrag(
         prices = v.get("prices", {}) or {}
         engine = v.get("engine", {}) or {}
         identifier = v.get("identifier", {}) or {}
-        
+
         if isinstance(model, list): model = model[0] if model else {}
         if isinstance(prices, list): prices = prices[0] if prices else {}
         if isinstance(engine, list): engine = engine[0] if engine else {}
@@ -459,16 +461,16 @@ def calculate_deckungsbeitrag(
         dimensions = v.get("dimensions", {}) or {}
         if isinstance(dimensions, list): dimensions = dimensions[0] if dimensions else {}
         laenge_cm = int(_safe_float(dimensions.get("length")))
-        
+
         # EK-Basis (Netto vs Brutto)
         ek_netto = _safe_float(prices.get("purchase"))
         ek_brutto = _safe_float(prices.get("purchase_gross")) or ek_netto
-        
+
         # Falls Netto == Brutto -> Differenzbesteuerung (Privateinkauf)
         is_diff_tax = False
         if ek_brutto > 0 and abs(ek_brutto - ek_netto) < 0.01:
             is_diff_tax = True
-            
+
         vk_brutto = _safe_float(prices.get("offer") or prices.get("list") or prices.get("basic"))
         if vk_brutto <= 0:
             continue
@@ -499,24 +501,24 @@ def calculate_deckungsbeitrag(
         join_keys = _vehicle_join_keys(v)
         vin = identifier.get("vin", "").upper()
         f_key = join_keys[0] if join_keys else ""
-        
+
         # 1. Einkaufskosten (Inland/Eingangsrechnungen)
         purchase_expenses = next((vehicle_expenses[key] for key in join_keys if key in vehicle_expenses), 0.0)
-        
+
         # 2. Werkstatt-Kosten & Erlöse aus dem Workshop-Modul
         # Interne Aufträge = Kosten für das Fahrzeug
         w_kosten_intern = kosten_idx.get(vin, 0.0) + kosten_idx.get(f_key, 0.0)
-        
+
         # Kunden-Aufträge (Zusatzumsatz laut User oft in VK inkludiert)
         w_erloes = erloes_idx.get(vin, 0.0) + erloes_idx.get(f_key, 0.0)
-        
+
         # Kombinierte Detail-Liste (BELS) für das Dashboard
         # Wir sammeln sowohl Kosten-Posten als auch Erlös-Posten
         w_items = (
             erloes_items_idx.get(vin, []) + erloes_items_idx.get(f_key, []) +
             work_kosten_items_idx.get(vin, []) + work_kosten_items_idx.get(f_key, [])
         )
-        
+
         # Gesamtkosten-Basis für den DB
         total_wk_kosten = purchase_expenses + w_kosten_intern
 
@@ -559,7 +561,7 @@ def calculate_deckungsbeitrag(
         for vh in vehicles:
             # DB = Netto-Erlös - Kosten-Basis - Werkstattkosten - Standkosten - Sonstige (laut Settings)
             # Dabei ist vh['umsatz_netto'] bereits nach Steuer (§25a oder Regel)
-            
+
             ek_brutto = vh["ek_brutto"]
             standtage = vh["standtage_vorschlag"]
             standkosten = ek_brutto * (STANDKOSTEN_ZINS / 365.0) * standtage if ek_brutto > 0 else 0.0
@@ -576,12 +578,12 @@ def calculate_deckungsbeitrag(
             )
             annahme = float(settings.get("annahme", 200))
             transport = float(settings.get("transport", 0))
-            
+
             # DB Berechnung mit Einbezug der Werkstatt-Erlöse und -Kosten
             # Wir nehmen umsatz_netto (bereits versteuerter VK) + Zusatzumsatz aus BELS (netto geschätzt)
             erloes_bels_netto = vh.get("werkstatt_erloes", 0) / 1.19
             db = (vh["umsatz_netto"] + erloes_bels_netto) - vh["kosten_basis"] - vh["werkstattkosten_vorschlag"] - standkosten - extra - finanz - annahme - transport
-            
+
             vk = vh["vk_brutto"]
             ek = ek_brutto
 
@@ -636,7 +638,7 @@ def calculate_deckungsbeitrag(
         "auto": True,
         "detail": f"{standtage:.0f} Tage bei {STANDKOSTEN_ZINS*100:.1f}% p.a.",
     })
-    
+
     # NEU: Interne Werkstattkosten als Abzug inkludieren
     wk_intern = target.get("werkstattkosten_vorschlag", 0.0)
     if wk_intern > 0:
@@ -667,13 +669,13 @@ def calculate_deckungsbeitrag(
     # Finale Berechnung basierend auf der Netto-Logik (Tax)
     total_abzuege = sum(p["betrag"] for p in abzuege)
     total_zuschlaege = sum(p["betrag"] for p in zuschlaege)
-    
+
     # DB = Netto-Erlös (nach Steuer) - Netto-EK-Basis - alle weiteren Abzüge + Zuschläge
     # Wir addieren den Werkstatt-Zusatzumsatz (BELS) hinzu
     umsatz_netto_fz = target["umsatz_netto"]
     erloes_bels_netto = target.get("werkstatt_erloes", 0) / 1.19
     ek_kosten_basis = target["kosten_basis"]
-    
+
     total_umsatz_netto = umsatz_netto_fz + erloes_bels_netto
     db = total_umsatz_netto - ek_kosten_basis - total_abzuege + total_zuschlaege
     db_prozent = (db / total_umsatz_netto * 100) if total_umsatz_netto > 0 else 0

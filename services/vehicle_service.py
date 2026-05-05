@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, List
+
 from core.utils import fmt_preis, iter_items
 
 # Setup logging
@@ -19,7 +20,7 @@ def _extract_vehicle_features(v: dict) -> dict:
 
     art_raw = str(v.get("typeof", "")).lower()
     art_label = "Wohnwagen" if v.get("type") == "Caravan" else art_raw.capitalize()
-    
+
     # Spezifische Mappings für Reisemobile-MKK
     if "integriert" in art_raw:
         art_label = "Integriert"
@@ -30,25 +31,25 @@ def _extract_vehicle_features(v: dict) -> dict:
 
     ps = engine.get("ps", 0) or engine.get("power", 0) or 0
     laenge = dimensions.get("length", 0) or 0
-    
+
     # Syscara Preis-Logik (Fallback Kette)
     # WICHTIG: Laut PROJECT_MAP.md können Preisfelder fehlen oder leere Listen sein.
     preis = prices.get("offer") or prices.get("list") or prices.get("basic") or 0
     ek_preis = prices.get("purchase") or 0
-    
+
     modelljahr = model.get("modelyear", 0) or 0
     schlafplaetze = beds_d.get("sleeping", 0) or 0
-    
+
     features = v.get("features", [])
     if not isinstance(features, list):
         features = []
 
     beds_list = beds_d.get("beds", []) if isinstance(beds_d.get("beds"), list) else []
     bed_types = [str(bed.get("type", "")).upper() for bed in beds_list if isinstance(bed, dict)]
-    
+
     has_hubbett = "PULL_BED" in bed_types or "ROOF_BED" in bed_types
     has_dusche = "sep_dusche" in features or "dusche" in features
-    
+
     gear_raw = str(engine.get("gear", "") or engine.get("gearbox", "")).upper()
     has_auto = any(x in gear_raw for x in ["AUTOMATIC", "AUT", "AUTOMATIK"])
     condition = str(v.get("condition", "")).upper()
@@ -74,7 +75,7 @@ def _apply_filters(v_data: dict, raw_v: dict, filters: dict) -> bool:
     """Helper to apply all filters to a vehicle."""
     if not filters:
         return True
-    
+
     # Basic Filters
     f_art = str(filters.get("art", "alle")).lower()
     if f_art != "alle" and f_art != v_data["art_label"].lower():
@@ -134,7 +135,7 @@ def map_and_filter(raw_data: Any, filters: dict) -> List[dict]:
     for v in iter_items(raw_data):
         if not v or not isinstance(v, dict):
             continue
-            
+
         v_id = v.get("id") or v.get("uid") or v.get("internal")
         if not v_id:
             continue

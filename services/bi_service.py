@@ -1,14 +1,12 @@
 import datetime
-import re
 import time
 from collections import Counter
 
 from core.config import SYSCARA_BASE
 from core.database import _MEM_CACHE, get_cached_or_fetch, iter_items
-from core.utils import _extract_order_nr, extract_order_datetime, fmt_preis
+from core.utils import extract_order_datetime
 from shared.sales_engine import calculate_net_sales
 from shared.vehicle_stats import build_vehicle_stats
-from services.vehicle_service import map_and_filter
 
 
 def _get_orders() -> list:

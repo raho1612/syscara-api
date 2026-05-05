@@ -4,9 +4,14 @@ import sys
 # Pfade patchen
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from api.kosten import _load_orders, _extract_order_date, _order_join_keys, _vehicle_join_keys
-from core.database import get_cached_or_fetch
+from api.kosten import (
+    _extract_order_date,
+    _load_orders,
+    _order_join_keys,
+    _vehicle_join_keys,
+)
 from core.config import SYSCARA_BASE
+from core.database import get_cached_or_fetch
 
 vehicles_raw = get_cached_or_fetch("sale/vehicles", f"{SYSCARA_BASE}/sale/vehicles/")
 if isinstance(vehicles_raw, dict) and "vehicles" in vehicles_raw:
@@ -40,9 +45,9 @@ for v in vehicles:
     status = str(v.get("status", "")).upper()
     if status != "RE": continue
     re_count += 1
-    
+
     jkeys = _vehicle_join_keys(v)
-    
+
     found = False
     for k in jkeys:
         d = vehicle_sale_date.get(k)
@@ -51,7 +56,7 @@ for v in vehicles:
             if "2025-01" <= ym <= "2026-03":
                 found = True
                 break
-    
+
     if found:
         v_in_range += 1
 

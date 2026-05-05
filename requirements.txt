@@ -7,3 +7,4 @@ google-generativeai
 openai
 anthropic
 httpx
+websocket-client

@@ -1,11 +1,18 @@
+import logging
 import os
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 
 from api.ai_analyst import register_ai_analyst_routes
 from api.evaluation import register_evaluation_routes
 from api.kosten import register_kosten_routes
 from api.kosten_user_data import register_kosten_user_data_routes
 from api.performance import register_performance_routes
+from api.telephony import register_telephony_routes
 from api.vehicles import register_vehicle_routes
 from api.werkstatt_katalog import register_werkstatt_katalog_routes
 from core.config import CURRENT_DIR, ROOT_DIR
@@ -13,6 +20,7 @@ from core.database import supabase
 from flask import Flask, jsonify
 from flask_cors import CORS
 from services.sync_service import register_sync_routes, start_sync_thread
+from services.threecx_service import start_threecx_service
 
 
 def _read_api_version() -> str:
@@ -37,6 +45,7 @@ register_kosten_routes(app)
 register_kosten_user_data_routes(app)
 register_sync_routes(app)
 register_werkstatt_katalog_routes(app)
+register_telephony_routes(app)
 
 
 @app.route("/api/health")
@@ -109,5 +118,6 @@ if __name__ == "__main__":
     # Hintergrund-Sync nur im Hauptthread starten
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or not app.debug:
         start_sync_thread(supabase)
+        start_threecx_service()
 
     app.run(host="0.0.0.0", port=port, debug=False)

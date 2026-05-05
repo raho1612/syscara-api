@@ -1,7 +1,6 @@
-import os
-import sys
 
 from main import app
+
 
 def test_routes():
     print("Testing /api/kosten/fahrzeuge")

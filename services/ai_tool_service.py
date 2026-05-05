@@ -1,7 +1,8 @@
-import re
 import logging
-from typing import Tuple, Optional, Any, Dict
-from core.utils import _extract_order_nr, iter_items
+import re
+from typing import Optional, Tuple
+
+from core.utils import _extract_order_nr
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -17,17 +18,17 @@ def detect_customer_query(question: str) -> Tuple[bool, dict]:
         m = re.search(p, q)
         if m:
             return True, {"type": "city", "value": m.group(1).strip()}
-            
+
     zip_m = re.search(r"\b(\d{5})\b", q)
     if zip_m:
         return True, {"type": "zip", "value": zip_m.group(1)}
-        
+
     name_pts = [r"(?:kunde|herr|frau)\s+([a-zäöüß]{2,20}(?:\s+[a-zäöüß]{2,20})?)"]
     for p in name_pts:
         m = re.search(p, q)
         if m:
             return True, {"type": "name", "value": m.group(1).strip()}
-            
+
     return False, {}
 
 def execute_local_customer_query(params: dict, orders: list) -> Tuple[str, Optional[dict]]:
@@ -35,12 +36,12 @@ def execute_local_customer_query(params: dict, orders: list) -> Tuple[str, Optio
     results = []
     q_t = params.get("type")
     val = params.get("value", "").lower().strip()
-    
+
     for o in orders:
         c = o.get("customer", {}) or {}
         if not isinstance(c, dict):
             continue
-            
+
         match = False
         if q_t == "city":
             match = val in (c.get("city") or "").lower()
@@ -50,7 +51,7 @@ def execute_local_customer_query(params: dict, orders: list) -> Tuple[str, Optio
             fn = (c.get("first_name") or "").lower()
             ln = (c.get("last_name") or "").lower()
             match = val in fn or val in ln
-            
+
         if match:
             results.append(o)
 
